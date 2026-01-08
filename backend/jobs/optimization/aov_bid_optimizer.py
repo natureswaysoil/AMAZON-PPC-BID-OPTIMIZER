@@ -286,13 +286,13 @@ def run_aov_optimizer():
             tier = opt['aov_tier']
             tier_summary[tier] = tier_summary.get(tier, 0) + 1
         
-        print("\n📊 Optimization Summary by AOV Tier:")
+        logger.info("\n📊 Optimization Summary by AOV Tier:")
         for tier, count in sorted(tier_summary.items()):
-            print(f"  Tier {tier}: {count} keywords")
+            logger.info(f"  Tier {tier}: {count} keywords")
         
-        print(f"\n✅ Total optimizations: {len(optimizations)}")
+        logger.info(f"\n✅ Total optimizations: {len(optimizations)}")
     else:
-        print("\n⚠️ No keywords needed optimization")
+        logger.info("\n⚠️ No keywords needed optimization")
 
 if __name__ == "__main__":
     run_aov_optimizer()

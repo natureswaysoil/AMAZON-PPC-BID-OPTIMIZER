@@ -44,7 +44,7 @@ class TokenManager:
                     'profile_id': profile_id.strip()
                 }
                 
-                logger.info(f"Using client_id: {self._credentials['client_id'][:10]}...")
+                logger.info("Successfully loaded Amazon API credentials from Secret Manager")
                 
             except Exception as e:
                 logger.error(f"Failed to load credentials from Secret Manager: {e}")
