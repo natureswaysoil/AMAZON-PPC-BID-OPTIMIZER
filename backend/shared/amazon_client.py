@@ -24,11 +24,12 @@ class AmazonAdsClient:
     - Comprehensive logging
     """
     
-    def __init__(self, region: str = "NA"):
-        self.region = region
-        self.base_url = "https://advertising-api.amazon.com"
+    def __init__(self, region: str = None):
+        from core.config import settings
+        self.region = region or settings.AMAZON_ADS_REGION
+        self.base_url = settings.get_amazon_ads_endpoint()
         self._request_count = 0
-        logger.info("✅ AmazonAdsClient initialized")
+        logger.info(f"✅ AmazonAdsClient initialized (region={self.region}, endpoint={self.base_url})")
     
     def _get_headers(self) -> Dict[str, str]:
         """Build request headers with current access token"""
@@ -444,6 +445,104 @@ class AmazonAdsClient:
                 time.sleep(10)
             else:
                 logger.warning(f"Unknown report status: {status}")
+                time.sleep(10)
+        
+        raise TimeoutError(f"Report {report_id} not ready after {max_wait}s")
+    
+    # ===== Reporting API v3 =====
+    
+    def request_and_download_report_v3(
+        self,
+        report_config: Dict,
+        max_wait: int = 300
+    ) -> list:
+        """
+        Request report using Amazon Ads API v3 and wait for completion
+        
+        Args:
+            report_config: Report configuration dict with v3 format
+            max_wait: Maximum seconds to wait for completion (default 5 min)
+        
+        Returns:
+            Report data as list of dicts
+        
+        Raises:
+            Exception: If report generation fails
+            TimeoutError: If report not ready within max_wait seconds
+        """
+        import gzip
+        import json
+        
+        # Step 1: Request report
+        endpoint = "/reporting/reports"
+        logger.info(f"Requesting report: {report_config.get('name', 'Unnamed Report')}")
+        
+        try:
+            response = self._make_request('POST', endpoint, json=report_config)
+        except Exception as e:
+            logger.error(f"❌ Report request failed: {e}")
+            logger.error(f"Report config: {json.dumps(report_config, indent=2)}")
+            raise
+        
+        report_id = response.get('reportId')
+        if not report_id:
+            raise Exception(f"No reportId returned. Response: {response}")
+        
+        logger.info(f"✅ Report requested: {report_id}")
+        
+        # Step 2: Poll for completion
+        start_time = time.time()
+        status_endpoint = f"/reporting/reports/{report_id}"
+        
+        while (time.time() - start_time) < max_wait:
+            try:
+                status = self._make_request('GET', status_endpoint)
+            except Exception as e:
+                logger.warning(f"⚠️ Failed to get report status: {e}")
+                time.sleep(10)
+                continue
+            
+            current_status = status.get('status')
+            
+            if current_status == 'SUCCESS':
+                # Step 3: Download report
+                download_url = status.get('url')
+                if not download_url:
+                    raise Exception(f"No download URL in successful report. Status: {status}")
+                
+                logger.info(f"✅ Report ready, downloading...")
+                
+                try:
+                    # Download and decompress
+                    report_response = requests.get(download_url, timeout=60)
+                    report_response.raise_for_status()
+                    
+                    # Decompress GZIP
+                    decompressed = gzip.decompress(report_response.content)
+                    
+                    # Parse JSON lines (each line is a JSON object)
+                    rows = []
+                    for line in decompressed.decode('utf-8').strip().split('\n'):
+                        if line:
+                            rows.append(json.loads(line))
+                    
+                    logger.info(f"✅ Downloaded {len(rows)} rows")
+                    return rows
+                    
+                except Exception as e:
+                    logger.error(f"❌ Failed to download/parse report: {e}")
+                    raise
+            
+            elif current_status == 'FAILURE':
+                error = status.get('failureReason', 'Unknown error')
+                raise Exception(f"Report generation failed: {error}")
+            
+            elif current_status in ['IN_PROGRESS', 'PENDING']:
+                logger.debug(f"⏳ Report status: {current_status}, waiting...")
+                time.sleep(10)
+            
+            else:
+                logger.warning(f"Unknown status: {current_status}")
                 time.sleep(10)
         
         raise TimeoutError(f"Report {report_id} not ready after {max_wait}s")

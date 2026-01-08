@@ -87,10 +87,27 @@ class Settings:
     LOSE_CLICKS_MIN: int = int(os.getenv("LOSE_CLICKS_MIN", "10"))
     LOSE_SPEND_MIN: float = float(os.getenv("LOSE_SPEND_MIN", "10.0"))
 
+    # Amazon Ads API Region
+    AMAZON_ADS_REGION: str = os.getenv("AMAZON_ADS_REGION", "NA")
+    
+    # Region to endpoint mapping
+    AMAZON_ADS_ENDPOINTS = {
+        "NA": "https://advertising-api.amazon.com",
+        "EU": "https://advertising-api-eu.amazon.com",
+        "FE": "https://advertising-api-fe.amazon.com"
+    }
+
     # Secret names (make sure these match Secret Manager)
     AMAZON_CLIENT_ID_SECRET: str = os.getenv("AMAZON_CLIENT_ID_SECRET", "amazon_client_id")
     AMAZON_CLIENT_SECRET_SECRET: str = os.getenv("AMAZON_CLIENT_SECRET_SECRET", "amazon_client_secret")
     AMAZON_REFRESH_TOKEN_SECRET: str = os.getenv("AMAZON_REFRESH_TOKEN_SECRET", "amazon_refresh_token")
     AMAZON_PROFILE_ID_SECRET: str = os.getenv("AMAZON_PROFILE_ID_SECRET", "amazon_profile_id")
+    
+    def get_amazon_ads_endpoint(self) -> str:
+        """Get the correct Amazon Ads API endpoint for configured region"""
+        return self.AMAZON_ADS_ENDPOINTS.get(
+            self.AMAZON_ADS_REGION,
+            self.AMAZON_ADS_ENDPOINTS["NA"]  # Default to NA
+        )
 
 settings = Settings()
