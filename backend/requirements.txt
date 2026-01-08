@@ -18,6 +18,9 @@ python-amazon-sp-api==0.15.0
 pandas==2.1.4
 numpy==1.26.2
 
+# Timezone support
+pytz==2023.3
+
 # Logging & Monitoring
 structlog==24.1.0
 

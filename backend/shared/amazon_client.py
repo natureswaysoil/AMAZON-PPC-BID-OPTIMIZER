@@ -255,6 +255,100 @@ class AmazonAdsClient:
         logger.info(f"✅ Batch update complete")
         return response
     
+    # ===== Bid Recommendations API =====
+    
+    def get_keyword_bid_recommendations(
+        self,
+        keyword_ids: List[int],
+        ad_group_id: int
+    ) -> Dict[int, Dict]:
+        """
+        Get Amazon's bid recommendations for keywords
+        
+        Args:
+            keyword_ids: List of keyword IDs to get recommendations for
+            ad_group_id: Ad group ID these keywords belong to
+        
+        Returns:
+            Dict mapping keyword_id to recommendation data:
+            {
+                keyword_id: {
+                    'suggested_bid': float,
+                    'range_start': float,
+                    'range_end': float,
+                    'confidence': str
+                }
+            }
+        """
+        # Amazon Ads API v2 bid recommendations endpoint
+        endpoint = '/v2/sp/keywords/bidRecommendations'
+        
+        data = {
+            'adGroupId': ad_group_id,
+            'keywords': [{'keywordId': kid} for kid in keyword_ids]
+        }
+        
+        logger.info(f"Fetching bid recommendations for {len(keyword_ids)} keywords...")
+        
+        try:
+            response = self._make_request('POST', endpoint, json=data)
+            
+            recommendations = {}
+            
+            if 'recommendations' in response:
+                for rec in response['recommendations']:
+                    keyword_id = rec.get('keywordId')
+                    
+                    if keyword_id and 'suggestedBid' in rec:
+                        recommendations[keyword_id] = {
+                            'suggested_bid': float(rec['suggestedBid']),
+                            'range_start': float(rec.get('rangeStart', 0)),
+                            'range_end': float(rec.get('rangeEnd', 0)),
+                            'confidence': rec.get('confidence', 'MEDIUM')
+                        }
+            
+            logger.info(f"✅ Retrieved {len(recommendations)} bid recommendations")
+            return recommendations
+            
+        except Exception as e:
+            logger.warning(f"⚠️ Failed to get bid recommendations: {e}")
+            # Return empty dict - optimizer will fall back to AOV-only calculation
+            return {}
+    
+    def get_keyword_bid_recommendations_batch(
+        self,
+        keywords: List[Dict]
+    ) -> Dict[int, Dict]:
+        """
+        Get bid recommendations for multiple keywords across ad groups
+        
+        Args:
+            keywords: List of dicts with 'keyword_id' and 'ad_group_id'
+        
+        Returns:
+            Dict mapping keyword_id to recommendation data
+        """
+        # Group by ad group for batching
+        by_ad_group = {}
+        for kw in keywords:
+            ag_id = kw['ad_group_id']
+            if ag_id not in by_ad_group:
+                by_ad_group[ag_id] = []
+            by_ad_group[ag_id].append(kw['keyword_id'])
+        
+        all_recommendations = {}
+        
+        # Fetch recommendations per ad group
+        for ad_group_id, keyword_ids in by_ad_group.items():
+            # Process in chunks of 100 (API limit)
+            chunk_size = 100
+            for i in range(0, len(keyword_ids), chunk_size):
+                chunk = keyword_ids[i:i + chunk_size]
+                recs = self.get_keyword_bid_recommendations(chunk, ad_group_id)
+                all_recommendations.update(recs)
+        
+        return all_recommendations
+    
     # ===== Ad Groups API =====
     
     def get_ad_groups(self, campaign_id: Optional[int] = None) -> List[Dict]:
