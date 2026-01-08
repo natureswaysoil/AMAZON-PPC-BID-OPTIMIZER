@@ -5,7 +5,7 @@ Syncs campaign, keyword, and product performance data from Amazon Ads to BigQuer
 """
 import logging
 import json
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import List, Dict, Any
 from google.cloud import bigquery
 from shared.amazon_client import amazon_client
@@ -71,7 +71,7 @@ class AmazonAdsSync:
     
     def sync_keywords_performance(self) -> List[Dict]:
         """Sync keyword performance data (30-day summary)"""
-        end_date = datetime.now()
+        end_date = datetime.now(timezone.utc)
         start_date = end_date - timedelta(days=30)
         
         # Build report configuration using v3 format
@@ -137,7 +137,7 @@ class AmazonAdsSync:
     
     def sync_campaign_performance(self) -> List[Dict]:
         """Sync daily campaign performance (last 14 days)"""
-        end_date = datetime.now()
+        end_date = datetime.now(timezone.utc)
         start_date = end_date - timedelta(days=14)
         
         report_config = {
@@ -190,7 +190,7 @@ class AmazonAdsSync:
     
     def sync_advertised_product_metrics(self) -> List[Dict]:
         """Sync advertised product metrics for AOV calculation"""
-        end_date = datetime.now()
+        end_date = datetime.now(timezone.utc)
         start_date = end_date - timedelta(days=30)
         
         report_config = {
@@ -248,7 +248,8 @@ class AmazonAdsSync:
     def _transform_keywords_data(self, raw_data: List[Dict]) -> List[Dict]:
         """Transform keyword report data to BigQuery schema"""
         transformed = []
-        sync_date = datetime.now().date()
+        sync_date = datetime.now(timezone.utc).date()
+        now_utc = datetime.now(timezone.utc)
         
         for row in raw_data:
             # Calculate derived metrics
@@ -284,7 +285,7 @@ class AmazonAdsSync:
                 'cvr': cvr,
                 'acos': acos,
                 'sync_date': sync_date.isoformat(),
-                'updated_at': datetime.now().isoformat()
+                'updated_at': now_utc.isoformat()
             })
         
         return transformed
@@ -292,6 +293,7 @@ class AmazonAdsSync:
     def _transform_campaign_data(self, raw_data: List[Dict]) -> List[Dict]:
         """Transform campaign report data to BigQuery schema"""
         transformed = []
+        now_utc = datetime.now(timezone.utc)
         
         for row in raw_data:
             # Calculate derived metrics
@@ -306,7 +308,7 @@ class AmazonAdsSync:
                 'campaign_name': row.get('campaignName', ''),
                 'campaign_status': row.get('campaignStatus', ''),
                 'campaign_budget': float(row.get('campaignBudget', 0)),
-                'date': row.get('date', datetime.now().date().isoformat()),
+                'date': row.get('date', datetime.now(timezone.utc).date().isoformat()),
                 'impressions': int(row.get('impressions', 0)),
                 'clicks': int(row.get('clicks', 0)),
                 'cost': cost,
@@ -314,7 +316,7 @@ class AmazonAdsSync:
                 'sales': sales,
                 'acos': acos,
                 'roas': roas,
-                'updated_at': datetime.now().isoformat()
+                'updated_at': now_utc.isoformat()
             })
         
         return transformed
@@ -322,7 +324,8 @@ class AmazonAdsSync:
     def _transform_product_data(self, raw_data: List[Dict]) -> List[Dict]:
         """Transform product report data to BigQuery schema"""
         transformed = []
-        sync_date = datetime.now().date()
+        sync_date = datetime.now(timezone.utc).date()
+        now_utc = datetime.now(timezone.utc)
         
         for row in raw_data:
             purchases = int(row.get('purchases', 0))
@@ -333,8 +336,8 @@ class AmazonAdsSync:
             aov = (sales / purchases) if purchases > 0 else 0
             
             transformed.append({
-                'campaign_id': int(row.get('campaignId', 0)) if row.get('campaignId') else None,
-                'ad_group_id': int(row.get('adGroupId', 0)) if row.get('adGroupId') else None,
+                'campaign_id': int(row['campaignId']) if row.get('campaignId') is not None else None,
+                'ad_group_id': int(row['adGroupId']) if row.get('adGroupId') is not None else None,
                 'asin': row.get('asin', ''),
                 'sku': row.get('sku', ''),
                 'impressions': int(row.get('impressions', 0)),
@@ -344,7 +347,7 @@ class AmazonAdsSync:
                 'sales': sales,
                 'units_sold': units_sold,
                 'sync_date': sync_date.isoformat(),
-                'updated_at': datetime.now().isoformat()
+                'updated_at': now_utc.isoformat()
             })
         
         return transformed
@@ -359,8 +362,10 @@ class AmazonAdsSync:
         
         logger.info(f"Loading {len(data)} rows to {table_id}...")
         
+        # Use WRITE_APPEND for incremental data to preserve history
+        # Note: For production, implement deduplication logic based on date/id
         job_config = bigquery.LoadJobConfig(
-            write_disposition=bigquery.WriteDisposition.WRITE_TRUNCATE,
+            write_disposition=bigquery.WriteDisposition.WRITE_APPEND,
             source_format=bigquery.SourceFormat.NEWLINE_DELIMITED_JSON,
         )
         

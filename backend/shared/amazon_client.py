@@ -510,6 +510,12 @@ class AmazonAdsClient:
                 if not download_url:
                     raise Exception(f"No download URL in successful report. Status: {status}")
                 
+                # Security: Validate download URL is from Amazon domain
+                from urllib.parse import urlparse
+                parsed_url = urlparse(download_url)
+                if not parsed_url.hostname or not parsed_url.hostname.endswith('.amazonaws.com'):
+                    raise Exception(f"Invalid download URL domain: {parsed_url.hostname}")
+                
                 logger.info(f"✅ Report ready, downloading...")
                 
                 try:
