@@ -6,6 +6,7 @@ from core.config import (
     get_time_multiplier, MAX_BID_AS_PERCENT_OF_AOV, settings
 )
 from aov_fetcher import aov_fetcher
+from shared.amazon_client import amazon_client
 from datetime import datetime
 import logging
 
@@ -14,6 +15,7 @@ logger = logging.getLogger(__name__)
 class AOVBidOptimizer:
     def __init__(self):
         self._bq_client = None
+        self.amazon_client = amazon_client  # Use shared client
     
     @property
     def bq_client(self):
@@ -115,7 +117,7 @@ class AOVBidOptimizer:
             'safety_ceiling': round(aov_safety_ceiling, 2)
         }
     
-    def optimize_all_keywords(self, dry_run: bool = False) -> list:
+    def optimize_all_keywords(self) -> list:
         """Get all keywords and calculate optimal bids"""
         
         # Fetch real-time AOV data once at the start
@@ -228,30 +230,72 @@ class AOVBidOptimizer:
             logger.info(f"Logged {len(optimizations)} optimizations to BigQuery")
         except Exception as e:
             logger.error(f"Failed to log optimizations: {e}")
+    
+    def apply_bid_changes(self, optimizations: list, dry_run: bool = False):
+        """Apply bid changes using shared Amazon client"""
+        if dry_run:
+            logger.info(f"DRY RUN: Would update {len(optimizations)} bids")
+            return
+        
+        if not optimizations:
+            logger.info("No bid changes to apply")
+            return
+        
+        # Batch updates for efficiency
+        batch_size = 100
+        successful_updates = 0
+        failed_updates = 0
+        
+        for i in range(0, len(optimizations), batch_size):
+            batch = optimizations[i:i + batch_size]
+            
+            try:
+                # Use shared client's batch update method
+                self.amazon_client.update_keyword_bids_batch(batch)
+                successful_updates += len(batch)
+                logger.info(f"✅ Updated batch {i//batch_size + 1} ({len(batch)} keywords)")
+            except Exception as e:
+                logger.error(f"❌ Failed to update batch: {e}")
+                failed_updates += len(batch)
+                # Continue with next batch instead of failing entirely
+                continue
+        
+        logger.info(f"Bid update summary: {successful_updates} successful, {failed_updates} failed")
 
 def run_aov_optimizer():
     """Entry point for Cloud Run job"""
+    import os
     logging.basicConfig(level=logging.INFO)
     logger.info("🚀 Starting AOV-based bid optimizer...")
     
-    optimizer = AOVBidOptimizer()
-    optimizations = optimizer.optimize_all_keywords(dry_run=False)
+    # Check for dry run mode
+    dry_run = os.getenv('DRY_RUN', 'False').lower() in ['true', '1', 'yes']
     
-    logger.info(f"Optimization complete: {len(optimizations)} bids updated")
+    optimizer = AOVBidOptimizer()
+    optimizations = optimizer.optimize_all_keywords()
+    
+    logger.info(f"Optimization complete: {len(optimizations)} bids to update")
     
     if optimizations:
+        # Apply the bid changes
+        optimizer.apply_bid_changes(optimizations, dry_run=dry_run)
+        
+        # Print summary
         tier_summary = {}
         for opt in optimizations:
             tier = opt['aov_tier']
             tier_summary[tier] = tier_summary.get(tier, 0) + 1
         
-        print("\n📊 Optimization Summary by AOV Tier:")
+        logger.info("")
+        logger.info("📊 Optimization Summary by AOV Tier:")
         for tier, count in sorted(tier_summary.items()):
-            print(f"  Tier {tier}: {count} keywords")
+            logger.info(f"  Tier {tier}: {count} keywords")
         
-        print(f"\n✅ Total optimizations: {len(optimizations)}")
+        logger.info("")
+        logger.info(f"✅ Total optimizations: {len(optimizations)}")
     else:
-        print("\n⚠️ No keywords needed optimization")
+        logger.info("")
+        logger.info("⚠️ No keywords needed optimization")
 
 if __name__ == "__main__":
     run_aov_optimizer()
