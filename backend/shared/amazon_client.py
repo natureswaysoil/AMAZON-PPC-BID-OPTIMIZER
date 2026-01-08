@@ -204,15 +204,27 @@ class AmazonAdsClient:
         Update multiple keyword bids in one request
         
         Args:
-            updates: List of dicts with 'keyword_id' and 'new_bid' keys
+            updates: List of dicts with 'keywordId' and 'bid' keys (Amazon API format)
+                     or 'keyword_id' and 'new_bid' keys (Python-style, for convenience)
         
         Returns:
             Batch update response
         """
-        data = [
-            {"keywordId": u['keyword_id'], "bid": round(u['new_bid'], 2)}
-            for u in updates
-        ]
+        # Support both Amazon API format and Python-style keys
+        data = []
+        for u in updates:
+            if 'keywordId' in u and 'bid' in u:
+                # Already in Amazon API format
+                data.append({
+                    "keywordId": u['keywordId'],
+                    "bid": round(u['bid'], 2)
+                })
+            else:
+                # Convert from Python-style keys
+                data.append({
+                    "keywordId": u['keyword_id'],
+                    "bid": round(u['new_bid'], 2)
+                })
         
         logger.info(f"Batch updating {len(updates)} keyword bids")
         response = self._make_request('PUT', '/v2/sp/keywords', json=data)

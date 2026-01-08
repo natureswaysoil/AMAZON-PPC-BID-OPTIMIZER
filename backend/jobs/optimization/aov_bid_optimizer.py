@@ -272,7 +272,7 @@ def run_aov_optimizer():
     dry_run = os.getenv('DRY_RUN', 'False').lower() in ['true', '1', 'yes']
     
     optimizer = AOVBidOptimizer()
-    optimizations = optimizer.optimize_all_keywords(dry_run=False)
+    optimizations = optimizer.optimize_all_keywords()
     
     logger.info(f"Optimization complete: {len(optimizations)} bids to update")
     
