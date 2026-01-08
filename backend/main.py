@@ -1,5 +1,8 @@
 """
 Main entry point for Amazon PPC Bid Optimizer backend jobs
+
+Note: Imports use absolute paths relative to the backend directory
+since in the Docker container, backend/ is copied to /app/ root.
 """
 import sys
 import logging

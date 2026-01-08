@@ -1,3 +1,5 @@
+# jobs/optimization/aov_bid_optimizer.py
+# Note: Uses absolute imports relative to backend directory (Docker container root)
 from google.cloud import bigquery
 from core.config import (
     AOV_TIERS, PERFORMANCE_MULTIPLIERS, MATCH_TYPE_MULTIPLIERS,

@@ -1,4 +1,5 @@
 # backend/aov_fetcher.py
+# Note: Uses absolute imports relative to backend directory (Docker container root)
 from google.cloud import bigquery
 from dataclasses import dataclass
 from typing import Dict, Optional
