@@ -365,9 +365,9 @@ class AmazonAdsClient:
         response = self._make_request('GET', '/v2/sp/adGroups', params=params)
         return response if isinstance(response, list) else []
     
-    # ===== Reporting API =====
+    # ===== Reporting API (v2 - deprecated) =====
     
-    def request_report(
+    def request_report_v2(
         self,
         record_type: str,
         metrics: List[str],
@@ -375,7 +375,7 @@ class AmazonAdsClient:
         segment: Optional[str] = None
     ) -> str:
         """
-        Request a report
+        Request a report using v2 API (DEPRECATED - use create_report for v3)
         
         Args:
             record_type: Type of report ('campaigns', 'keywords', 'adGroups')
@@ -403,17 +403,17 @@ class AmazonAdsClient:
         logger.info(f"✅ Report requested: {report_id}")
         return report_id
     
-    def get_report_status(self, report_id: str) -> Dict:
-        """Check report generation status"""
+    def get_report_status_v2(self, report_id: str) -> Dict:
+        """Check report generation status (v2 API - DEPRECATED)"""
         endpoint = f"/v2/reports/{report_id}"
         return self._make_request('GET', endpoint)
     
-    def download_report(self, report_id: str, max_wait: int = 300) -> Dict:
+    def download_report_v2(self, report_id: str, max_wait: int = 300) -> Dict:
         """
-        Download completed report (with polling)
+        Download completed report with polling (v2 API - DEPRECATED)
         
         Args:
-            report_id: Report ID from request_report
+            report_id: Report ID from request_report_v2
             max_wait: Maximum seconds to wait for completion
         
         Returns:
@@ -422,7 +422,7 @@ class AmazonAdsClient:
         start_time = time.time()
         
         while (time.time() - start_time) < max_wait:
-            status_response = self.get_report_status(report_id)
+            status_response = self.get_report_status_v2(report_id)
             status = status_response.get('status')
             
             if status == 'SUCCESS':
@@ -447,6 +447,202 @@ class AmazonAdsClient:
                 time.sleep(10)
         
         raise TimeoutError(f"Report {report_id} not ready after {max_wait}s")
+    
+    # ===== Reporting API v3 =====
+    
+    def create_report(
+        self,
+        report_type: str,
+        metrics: List[str],
+        start_date: str,
+        end_date: str,
+        time_unit: str = "DAILY",
+        group_by: Optional[List[str]] = None
+    ) -> str:
+        """
+        Create a report using Amazon Ads API v3
+        
+        Args:
+            report_type: Type of report (campaigns, keywords, adGroups, targets, etc.)
+            metrics: List of metrics to include (impressions, clicks, cost, etc.)
+            start_date: Start date in YYYY-MM-DD format
+            end_date: End date in YYYY-MM-DD format
+            time_unit: Time aggregation (DAILY, WEEKLY, MONTHLY)
+            group_by: Optional grouping dimensions
+        
+        Returns:
+            Report ID for polling
+        
+        Example:
+            report_id = client.create_report(
+                report_type='campaigns',
+                metrics=['impressions', 'clicks', 'cost', 'sales'],
+                start_date='2026-01-01',
+                end_date='2026-01-08'
+            )
+        """
+        # Amazon Ads API v3 reporting endpoint
+        endpoint = '/reporting/reports'
+        
+        # Build request body according to v3 spec
+        report_config = {
+            "name": f"{report_type}_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}",
+            "startDate": start_date,
+            "endDate": end_date,
+            "configuration": {
+                "adProduct": "SPONSORED_PRODUCTS",
+                "groupBy": group_by or [report_type.upper()],
+                "columns": metrics,
+                "reportTypeId": report_type,
+                "timeUnit": time_unit,
+                "format": "GZIP_JSON"
+            }
+        }
+        
+        logger.info(f"Creating {report_type} report from {start_date} to {end_date}...")
+        
+        try:
+            response = self._make_request('POST', endpoint, json=report_config)
+            
+            report_id = response.get('reportId')
+            
+            if not report_id:
+                raise Exception(f"No reportId in response: {response}")
+            
+            logger.info(f"✅ Report created: {report_id}")
+            return report_id
+            
+        except Exception as e:
+            logger.error(f"❌ Failed to create report: {e}")
+            raise
+    
+    def get_report_status(self, report_id: str) -> Dict:
+        """
+        Check report generation status
+        
+        Returns:
+            {
+                'status': 'IN_PROGRESS' | 'SUCCESS' | 'FAILURE',
+                'location': 'download_url' (if SUCCESS),
+                'failureReason': 'error' (if FAILURE)
+            }
+        """
+        endpoint = f'/reporting/reports/{report_id}'
+        
+        try:
+            response = self._make_request('GET', endpoint)
+            return response
+        except Exception as e:
+            logger.error(f"Failed to get report status: {e}")
+            raise
+    
+    def download_report(
+        self,
+        report_id: str,
+        max_wait_seconds: int = 600,
+        poll_interval: int = 10
+    ) -> List[Dict]:
+        """
+        Download completed report with polling
+        
+        Args:
+            report_id: Report ID from create_report()
+            max_wait_seconds: Maximum time to wait for completion
+            poll_interval: Seconds between status checks
+        
+        Returns:
+            List of report rows as dicts
+        """
+        import gzip
+        import json
+        
+        start_time = time.time()
+        
+        logger.info(f"Polling for report {report_id} completion...")
+        
+        while (time.time() - start_time) < max_wait_seconds:
+            status_response = self.get_report_status(report_id)
+            status = status_response.get('status')
+            
+            if status == 'SUCCESS':
+                download_url = status_response.get('location')
+                
+                if not download_url:
+                    raise Exception(f"Report succeeded but no download URL: {status_response}")
+                
+                logger.info(f"✅ Report ready. Downloading from {download_url[:50]}...")
+                
+                # Download the gzipped JSON report
+                try:
+                    download_response = requests.get(download_url, timeout=60)
+                    download_response.raise_for_status()
+                except requests.RequestException as e:
+                    raise Exception(f"Failed to download report: {e}")
+                
+                # Decompress and parse
+                try:
+                    decompressed = gzip.decompress(download_response.content)
+                    report_data = json.loads(decompressed)
+                except gzip.BadGzipFile as e:
+                    raise Exception(f"Failed to decompress report (invalid GZIP format): {e}")
+                except json.JSONDecodeError as e:
+                    raise Exception(f"Failed to parse report JSON: {e}")
+                except Exception as e:
+                    raise Exception(f"Failed to process report data: {e}")
+                
+                # Report format is usually an array of objects
+                rows = report_data if isinstance(report_data, list) else report_data.get('data', [])
+                
+                logger.info(f"✅ Downloaded {len(rows)} report rows")
+                return rows
+            
+            elif status == 'FAILURE':
+                failure_reason = status_response.get('failureReason', 'Unknown')
+                raise Exception(f"Report generation failed: {failure_reason}")
+            
+            elif status in ['IN_PROGRESS', 'PENDING']:
+                logger.debug(f"Report status: {status}, waiting {poll_interval}s...")
+                time.sleep(poll_interval)
+            
+            else:
+                logger.warning(f"Unknown report status: {status}")
+                time.sleep(poll_interval)
+        
+        raise TimeoutError(f"Report {report_id} not ready after {max_wait_seconds}s")
+    
+    def get_campaigns_report(self, start_date: str, end_date: str) -> List[Dict]:
+        """Helper: Get campaigns performance report"""
+        report_id = self.create_report(
+            report_type='campaigns',
+            metrics=['campaignId', 'campaignName', 'campaignStatus', 'impressions', 
+                     'clicks', 'cost', 'sales', 'purchases', 'campaignBudget'],
+            start_date=start_date,
+            end_date=end_date
+        )
+        return self.download_report(report_id)
+    
+    def get_keywords_report(self, start_date: str, end_date: str) -> List[Dict]:
+        """Helper: Get keywords performance report"""
+        report_id = self.create_report(
+            report_type='keywords',
+            metrics=['campaignId', 'adGroupId', 'keywordId', 'keywordText', 'matchType',
+                     'impressions', 'clicks', 'cost', 'sales', 'purchases'],
+            start_date=start_date,
+            end_date=end_date
+        )
+        return self.download_report(report_id)
+    
+    def get_search_terms_report(self, start_date: str, end_date: str) -> List[Dict]:
+        """Helper: Get search terms report"""
+        report_id = self.create_report(
+            report_type='keywords',
+            metrics=['campaignId', 'adGroupId', 'keywordId', 'query', 
+                     'impressions', 'clicks', 'cost', 'sales', 'purchases'],
+            start_date=start_date,
+            end_date=end_date,
+            group_by=['KEYWORD', 'QUERY']
+        )
+        return self.download_report(report_id)
     
     # ===== Utility Methods =====
     
