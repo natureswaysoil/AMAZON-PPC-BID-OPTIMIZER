@@ -87,6 +87,9 @@ class Settings(BaseSettings):
     LOSE_CLICKS_MIN: int = 10
     LOSE_SPEND_MIN: float = 10.0
     
+    # Amazon Ads API Region
+    AMAZON_ADS_REGION: str = "NA"
+    
     # Secret names
     AMAZON_CLIENT_ID_SECRET: str = "amazon_client_id"
     AMAZON_CLIENT_SECRET_SECRET: str = "amazon_client_secret"
@@ -102,5 +105,14 @@ class Settings(BaseSettings):
         # If PROJECT_ID not set, try GOOGLE_CLOUD_PROJECT
         if not self.PROJECT_ID:
             self.PROJECT_ID = os.getenv('GOOGLE_CLOUD_PROJECT', '')
+    
+    def get_amazon_ads_endpoint(self) -> str:
+        """Get the correct Amazon Ads API endpoint for configured region"""
+        endpoints = {
+            "NA": "https://advertising-api.amazon.com",
+            "EU": "https://advertising-api-eu.amazon.com",
+            "FE": "https://advertising-api-fe.amazon.com"
+        }
+        return endpoints.get(self.AMAZON_ADS_REGION, endpoints["NA"])
 
 settings = Settings()
