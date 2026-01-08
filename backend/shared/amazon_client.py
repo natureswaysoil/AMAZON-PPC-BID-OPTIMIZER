@@ -573,12 +573,22 @@ class AmazonAdsClient:
                 logger.info(f"✅ Report ready. Downloading from {download_url[:50]}...")
                 
                 # Download the gzipped JSON report
-                download_response = requests.get(download_url, timeout=60)
-                download_response.raise_for_status()
+                try:
+                    download_response = requests.get(download_url, timeout=60)
+                    download_response.raise_for_status()
+                except requests.RequestException as e:
+                    raise Exception(f"Failed to download report: {e}")
                 
                 # Decompress and parse
-                decompressed = gzip.decompress(download_response.content)
-                report_data = json.loads(decompressed)
+                try:
+                    decompressed = gzip.decompress(download_response.content)
+                    report_data = json.loads(decompressed)
+                except gzip.BadGzipFile as e:
+                    raise Exception(f"Failed to decompress report (invalid GZIP format): {e}")
+                except json.JSONDecodeError as e:
+                    raise Exception(f"Failed to parse report JSON: {e}")
+                except Exception as e:
+                    raise Exception(f"Failed to process report data: {e}")
                 
                 # Report format is usually an array of objects
                 rows = report_data if isinstance(report_data, list) else report_data.get('data', [])

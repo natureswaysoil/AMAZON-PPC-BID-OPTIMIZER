@@ -234,17 +234,23 @@ class AmazonAdsDataSync:
         
         This uses campaign performance data joined with order data to calculate
         Average Order Value per campaign/ASIN
+        
+        Note: Default AOV of 30.0 is used when no purchases are recorded.
+        This represents the typical baseline AOV for starter campaigns.
         """
         logger.info(f"📦 Calculating advertised product metrics (last {days_back} days)...")
         
         try:
+            # Default AOV from settings or fallback to 30.0 (typical baseline)
+            default_aov = 30.0
+            
             # Query to calculate AOV from orders and campaign data
             query = f"""
             CREATE OR REPLACE TABLE `{settings.PROJECT_ID}.{self.dataset}.sp_advertised_product_metrics` AS
             SELECT
                 cp.campaign_id,
                 DATE(cp.date) as date,
-                COALESCE(SUM(cp.sales) / NULLIF(SUM(cp.purchases), 0), 30.0) as aov,
+                COALESCE(SUM(cp.sales) / NULLIF(SUM(cp.purchases), 0), {default_aov}) as aov,
                 SUM(cp.purchases) as orders,
                 SUM(cp.sales) as revenue,
                 CURRENT_TIMESTAMP() as updated_at
