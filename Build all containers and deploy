@@ -1,2 +1,0 @@
-# Build all containers and deploy
-gcloud builds submit --config cloudbuild.yaml
