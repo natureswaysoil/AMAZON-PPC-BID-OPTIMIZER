@@ -3,7 +3,7 @@ from google.cloud import bigquery
 from dataclasses import dataclass
 from typing import Dict, Optional
 import logging
-from .core.config import settings
+from core.config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -17,8 +17,15 @@ class AOVFetcher:
     """Fetches real-time AOV data from BigQuery or cache"""
     
     def __init__(self):
-        self.bq_client = bigquery.Client(project=settings.PROJECT_ID)
+        self._bq_client = None
         self._aov_cache: Dict[str, AOVData] = {}
+    
+    @property
+    def bq_client(self):
+        """Lazy initialization of BigQuery client"""
+        if self._bq_client is None:
+            self._bq_client = bigquery.Client(project=settings.PROJECT_ID)
+        return self._bq_client
     
     def fetch_all(self):
         """Fetch all AOV data from BigQuery and cache it"""

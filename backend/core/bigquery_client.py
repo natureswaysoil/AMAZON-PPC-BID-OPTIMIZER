@@ -1,6 +1,6 @@
 # backend/core/bigquery_client.py
 from google.cloud import bigquery
-from .config import settings
+from core.config import settings
 import logging
 
 logger = logging.getLogger(__name__)
@@ -9,8 +9,15 @@ class BigQueryClient:
     """BigQuery client wrapper"""
     
     def __init__(self):
-        self.client = bigquery.Client(project=settings.PROJECT_ID)
+        self._client = None
         self.dataset = settings.BIGQUERY_DATASET
+    
+    @property
+    def client(self):
+        """Lazy initialization of BigQuery client"""
+        if self._client is None:
+            self._client = bigquery.Client(project=settings.PROJECT_ID)
+        return self._client
     
     def get_table_id(self, table_name: str) -> str:
         """Get fully qualified table ID"""

@@ -21,8 +21,8 @@ def main():
     
     logger.info(f"Starting job: {job_type}")
     
-    if job_type == 'aov_optimizer':
-        from backend.jobs.optimization.aov_bid_optimizer import run_aov_optimizer
+    if job_type in ['aov_optimizer', 'bid_optimizer']:
+        from jobs.optimization.aov_bid_optimizer import run_aov_optimizer
         run_aov_optimizer()
     else:
         logger.error(f"Unknown job type: {job_type}")

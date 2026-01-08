@@ -1,9 +1,9 @@
 from google.cloud import bigquery
-from backend.core.config import (
+from core.config import (
     AOV_TIERS, PERFORMANCE_MULTIPLIERS, MATCH_TYPE_MULTIPLIERS,
     get_time_multiplier, MAX_BID_AS_PERCENT_OF_AOV, settings
 )
-from backend.aov_fetcher import aov_fetcher
+from aov_fetcher import aov_fetcher
 from datetime import datetime
 import logging
 
@@ -11,7 +11,14 @@ logger = logging.getLogger(__name__)
 
 class AOVBidOptimizer:
     def __init__(self):
-        self.bq_client = bigquery.Client(project=settings.PROJECT_ID)
+        self._bq_client = None
+    
+    @property
+    def bq_client(self):
+        """Lazy initialization of BigQuery client"""
+        if self._bq_client is None:
+            self._bq_client = bigquery.Client(project=settings.PROJECT_ID)
+        return self._bq_client
     
     def get_aov_tier(self, aov: float) -> str:
         """Determine AOV tier for a product"""

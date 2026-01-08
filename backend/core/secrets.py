@@ -4,7 +4,7 @@ from functools import lru_cache
 import json
 import logging
 from typing import Dict
-from .config import settings
+from core.config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -13,7 +13,14 @@ class SecretManager:
     
     def __init__(self, project_id: str = None):
         self.project_id = project_id or settings.PROJECT_ID
-        self.client = secretmanager.SecretManagerServiceClient()
+        self._client = None
+    
+    @property
+    def client(self):
+        """Lazy initialization of Secret Manager client"""
+        if self._client is None:
+            self._client = secretmanager.SecretManagerServiceClient()
+        return self._client
     
     @lru_cache(maxsize=128)
     def get_secret(self, secret_id: str, version: str = "latest") -> str:
