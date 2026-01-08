@@ -279,8 +279,12 @@ class AmazonAdsClient:
                     'confidence': str
                 }
             }
+        
+        Note: This uses the v2 endpoint structure. For newer API versions,
+        consider using /sp/targets/bid/recommendations with keyword text/match type.
         """
         # Amazon Ads API v2 bid recommendations endpoint
+        # Note: Newer API versions use /sp/targets/bid/recommendations
         endpoint = '/v2/sp/keywords/bidRecommendations'
         
         data = {

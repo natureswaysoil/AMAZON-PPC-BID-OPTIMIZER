@@ -201,7 +201,7 @@ class AOVBidOptimizer:
         # Validate blend weight is between 0 and 1
         if not (0 <= blend_weight <= 1):
             logger.warning(f"Invalid SUGGEST_BLEND value: {blend_weight}, using default 0.70")
-            blend_weight = 0.70
+            blend_weight = 0.70  # Default fallback to match settings default
         
         blended = (suggested_bid * blend_weight) + (aov_bid * (1 - blend_weight))
         
