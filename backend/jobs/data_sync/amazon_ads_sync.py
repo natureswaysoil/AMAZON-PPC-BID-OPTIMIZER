@@ -139,8 +139,14 @@ class AmazonAdsDataSync:
             # Transform to BigQuery format
             rows = []
             for row in report_data:
+                # Date is required for time-series data
+                date_value = row.get('date')
+                if not date_value:
+                    logger.warning(f"⚠️ Skipping row with missing date: {row}")
+                    continue
+                
                 rows.append({
-                    'date': row.get('date', start_date.isoformat()),
+                    'date': date_value,
                     'campaign_id': int(row.get('campaignId', 0)),
                     'impressions': int(row.get('impressions', 0)),
                     'clicks': int(row.get('clicks', 0)),
@@ -187,8 +193,14 @@ class AmazonAdsDataSync:
             # Transform to BigQuery format
             rows = []
             for row in report_data:
+                # Date is required for time-series data
+                date_value = row.get('date')
+                if not date_value:
+                    logger.warning(f"⚠️ Skipping row with missing date: {row}")
+                    continue
+                
                 rows.append({
-                    'date': row.get('date', start_date.isoformat()),
+                    'date': date_value,
                     'keyword_id': int(row.get('keywordId', 0)),
                     'campaign_id': int(row.get('campaignId', 0)),
                     'ad_group_id': int(row.get('adGroupId', 0)),
