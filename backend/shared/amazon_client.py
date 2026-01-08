@@ -209,22 +209,32 @@ class AmazonAdsClient:
         
         Returns:
             Batch update response
+        
+        Raises:
+            ValueError: If required keys are missing from any update dict
         """
         # Support both Amazon API format and Python-style keys
         data = []
-        for u in updates:
+        for i, u in enumerate(updates):
             if 'keywordId' in u and 'bid' in u:
                 # Already in Amazon API format
                 data.append({
                     "keywordId": u['keywordId'],
                     "bid": round(u['bid'], 2)
                 })
-            else:
+            elif 'keyword_id' in u and 'new_bid' in u:
                 # Convert from Python-style keys
                 data.append({
                     "keywordId": u['keyword_id'],
                     "bid": round(u['new_bid'], 2)
                 })
+            else:
+                # Missing required keys
+                raise ValueError(
+                    f"Update dict at index {i} missing required keys. "
+                    f"Expected either ('keywordId', 'bid') or ('keyword_id', 'new_bid'), "
+                    f"but got: {list(u.keys())}"
+                )
         
         logger.info(f"Batch updating {len(updates)} keyword bids")
         response = self._make_request('PUT', '/v2/sp/keywords', json=data)
@@ -307,6 +317,8 @@ class AmazonAdsClient:
                 report_url = status_response['location']
                 logger.info(f"✅ Report ready. Downloading...")
                 
+                # Note: Amazon returns pre-signed URLs that don't require authentication headers
+                # but we could add them for consistency if needed
                 report_data = requests.get(report_url, timeout=60)
                 report_data.raise_for_status()
                 

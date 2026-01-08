@@ -117,7 +117,7 @@ class AOVBidOptimizer:
             'safety_ceiling': round(aov_safety_ceiling, 2)
         }
     
-    def optimize_all_keywords(self, dry_run: bool = False) -> list:
+    def optimize_all_keywords(self) -> list:
         """Get all keywords and calculate optimal bids"""
         
         # Fetch real-time AOV data once at the start

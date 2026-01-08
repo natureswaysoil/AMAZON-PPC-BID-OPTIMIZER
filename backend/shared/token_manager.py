@@ -31,18 +31,18 @@ class TokenManager:
         """Load Amazon credentials from Secret Manager"""
         if self._credentials is None:
             try:
-                # Try loading from Secret Manager
-                secret_id = settings.AMAZON_CLIENT_ID_SECRET
-                secret_data = secret_manager.get_secret(secret_id)
+                # Load individual secrets as configured in settings
+                client_id = secret_manager.get_secret(settings.AMAZON_CLIENT_ID_SECRET)
+                client_secret = secret_manager.get_secret(settings.AMAZON_CLIENT_SECRET_SECRET)
+                refresh_token = secret_manager.get_secret(settings.AMAZON_REFRESH_TOKEN_SECRET)
+                profile_id = secret_manager.get_secret(settings.AMAZON_PROFILE_ID_SECRET)
                 
-                import json
-                self._credentials = json.loads(secret_data)
-                
-                # Validate required fields
-                required_fields = ['client_id', 'client_secret', 'refresh_token', 'profile_id']
-                for field in required_fields:
-                    if field not in self._credentials:
-                        raise ValueError(f"Missing required field: {field}")
+                self._credentials = {
+                    'client_id': client_id.strip(),
+                    'client_secret': client_secret.strip(),
+                    'refresh_token': refresh_token.strip(),
+                    'profile_id': profile_id.strip()
+                }
                 
                 logger.info(f"Using client_id: {self._credentials['client_id'][:10]}...")
                 
