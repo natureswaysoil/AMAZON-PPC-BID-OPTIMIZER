@@ -336,8 +336,8 @@ class AmazonAdsSync:
             aov = (sales / purchases) if purchases > 0 else 0
             
             transformed.append({
-                'campaign_id': int(row['campaignId']) if row.get('campaignId') is not None else None,
-                'ad_group_id': int(row['adGroupId']) if row.get('adGroupId') is not None else None,
+                'campaign_id': int(row.get('campaignId')) if row.get('campaignId') is not None else None,
+                'ad_group_id': int(row.get('adGroupId')) if row.get('adGroupId') is not None else None,
                 'asin': row.get('asin', ''),
                 'sku': row.get('sku', ''),
                 'impressions': int(row.get('impressions', 0)),
