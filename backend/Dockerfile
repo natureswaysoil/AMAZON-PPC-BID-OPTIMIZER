@@ -19,4 +19,4 @@ ENV PYTHONUNBUFFERED=1
 ENV PYTHONPATH=/app
 
 # Default command (overridden by Cloud Run Job)
-CMD ["python", "-m", "main"]
+CMD ["python", "main.py"]

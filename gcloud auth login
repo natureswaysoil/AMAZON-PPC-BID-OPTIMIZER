@@ -1,3 +1,0 @@
-gcloud auth login
-gcloud config set project amazon-ppc-bid-optimizer
-./scripts/setup.sh amazon-ppc-bid-optimizer us-central1
