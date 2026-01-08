@@ -203,15 +203,29 @@ class AmazonAdsClient:
         """
         Update multiple keyword bids in one request
         
+        This method accepts optimization dictionaries and converts them to Amazon API format.
+        
         Args:
-            updates: List of dicts with 'keywordId' and 'bid' keys (Amazon API format)
-                     or 'keyword_id' and 'new_bid' keys (Python-style, for convenience)
+            updates: List of dicts with ONE of these formats:
+                     1. Amazon API format: {'keywordId': 123, 'bid': 1.50}
+                     2. Python-style: {'keyword_id': 123, 'new_bid': 1.50}
+                     
+                     The optimizer returns format #2, which is automatically converted.
         
         Returns:
             Batch update response
         
         Raises:
             ValueError: If required keys are missing from any update dict
+        
+        Example:
+            # Direct from optimizer
+            optimizations = optimizer.optimize_all_keywords()
+            client.update_keyword_bids_batch(optimizations)
+            
+            # Or with explicit format
+            updates = [{'keyword_id': 123, 'new_bid': 1.50}]
+            client.update_keyword_bids_batch(updates)
         """
         # Support both Amazon API format and Python-style keys
         data = []
@@ -223,7 +237,7 @@ class AmazonAdsClient:
                     "bid": round(u['bid'], 2)
                 })
             elif 'keyword_id' in u and 'new_bid' in u:
-                # Convert from Python-style keys
+                # Convert from Python-style keys (optimizer format)
                 data.append({
                     "keywordId": u['keyword_id'],
                     "bid": round(u['new_bid'], 2)
@@ -317,8 +331,8 @@ class AmazonAdsClient:
                 report_url = status_response['location']
                 logger.info(f"✅ Report ready. Downloading...")
                 
-                # Note: Amazon returns pre-signed URLs that don't require authentication headers
-                # but we could add them for consistency if needed
+                # Amazon returns pre-signed URLs containing temporary authentication
+                # credentials in the URL parameters, so no additional headers are needed
                 report_data = requests.get(report_url, timeout=60)
                 report_data.raise_for_status()
                 
