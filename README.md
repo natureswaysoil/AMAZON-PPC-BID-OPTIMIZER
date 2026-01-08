@@ -77,6 +77,7 @@ Edit `.env` with your project-specific values.
 - [Alerts](docs/alerts.md)
 - [Dashboard](docs/dashboard.md)
 - [Dashboard Components](docs/dashboard-components.md)
+- [Amazon Ads Data Sync](docs/amazon-ads-data-sync.md)
 
 ## Project Structure
 
@@ -90,12 +91,15 @@ backend/
 │   ├── config.py             # Configuration settings
 │   ├── secrets.py            # Secret Manager integration
 │   └── bigquery_client.py    # BigQuery wrapper
-├── shared/                    # NEW: Shared authentication modules
+├── shared/                    # Shared authentication modules
 │   ├── __init__.py
 │   ├── token_manager.py      # OAuth token management
 │   └── amazon_client.py      # Amazon Ads API client
 └── jobs/
     ├── __init__.py
+    ├── data_sync/             # NEW: Data synchronization jobs
+    │   ├── __init__.py
+    │   └── amazon_ads_sync.py # Amazon Ads API v3 sync
     └── optimization/
         ├── __init__.py
         └── aov_bid_optimizer.py  # Main optimization logic
