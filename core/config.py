@@ -5,24 +5,25 @@ from dataclasses import dataclass
 class AOVTier:
     name: str
     min_aov: float
-    max_aov: float
+    max_aov: float # Consider this an exclusive upper bound for lookup clarity
     base_ceiling_exact: float
 
 # AOV-based bid ceilings
+# Making max_aov an exclusive upper bound for clearer range definition
 AOV_TIERS = {
-    'L': AOVTier('Low', 18, 29, 1.05),      # $18-29 products
-    'M': AOVTier('Mid', 30, 45, 1.45),      # $30-45 products
-    'H': AOVTier('High', 46, 70, 1.95),     # $46-70 products
-    'X': AOVTier('Premium', 70, 999, 2.50)  # $70+ products
+    'L': AOVTier('Low', 18.0, 30.0, 1.05),    # $18-29.99 products (max_aov is exclusive)
+    'M': AOVTier('Mid', 30.0, 46.0, 1.45),    # $30-45.99 products
+    'H': AOVTier('High', 46.0, 70.0, 1.95),   # $46-69.99 products
+    'X': AOVTier('Premium', 70.0, 999.0, 2.50) # $70+ products
 }
 
 # Performance tier multipliers
 PERFORMANCE_MULTIPLIERS = {
-    'A': 1.00,   # Winners
-    'B': 0.85,   # Solid
-    'C': 0.65,   # Testing
-    'D': 0.40,   # Bleeding
-    'E': 0.15    # Kill zone
+    'A': 1.00,  # Winners
+    'B': 0.85,  # Solid
+    'C': 0.65,  # Testing
+    'D': 0.40,  # Bleeding
+    'E': 0.15   # Kill zone
 }
 
 # Match type multipliers
@@ -35,26 +36,28 @@ MATCH_TYPE_MULTIPLIERS = {
 
 # Prime time configuration (2-hour windows during peak)
 PRIME_HOURS = [
-    (16, 18),  # 4-6 PM
-    (18, 20),  # 6-8 PM
-    (20, 22),  # 8-10 PM
+    (16, 18),  # 4-6 PM (hour 16 and 17)
+    (18, 20),  # 6-8 PM (hour 18 and 19)
+    (20, 22),  # 8-10 PM (hour 20 and 21)
 ]
 
 def get_time_multiplier(hour: int, performance_tier: str,
                         off_hours_mult: float = 0.90,
                         prime_a_mult: float = 1.10,
                         prime_other_mult: float = 1.00) -> float:
-    """Get bid multiplier based on time and performance."""
-    in_prime = any(start <= hour < end for start, end in PRIME_HOURS)
+    """Get bid multiplier based on time and performance.
+    Applies prime_a_mult/prime_other_mult to all defined PRIME_HOURS.
+    """
+    is_prime_hour = False
+    for start, end in PRIME_HOURS:
+        if start <= hour < end: # hour is >= start and < end
+            is_prime_hour = True
+            break # Found a prime window, no need to check further
 
-    if not in_prime:
-        return off_hours_mult
-
-    # During prime time
-    if 18 <= hour < 22:
+    if is_prime_hour:
         return prime_a_mult if performance_tier == 'A' else prime_other_mult
-
-    return 1.00
+    else:
+        return off_hours_mult
 
 # Safety limits
 MAX_BID_AS_PERCENT_OF_AOV = 0.07  # Never bid more than 7% of AOV
