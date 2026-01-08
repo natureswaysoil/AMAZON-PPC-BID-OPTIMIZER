@@ -107,10 +107,10 @@ class AOVBidOptimizer:
       new_bid = current_bid # If change is less than 5%, keep current bid
      
     reasoning = (
-      f"AOV: ${aov:.2f} (Tier {}) | "
-      f"Perf: Tier {} | "
-      f"Match: {} | "
-      f"Hour: {} | "
+      f"AOV: ${aov:.2f} (Tier {aov_tier_code}) | "
+      f"Perf: Tier {performance_tier} | "
+      f"Match: {match_type} | "
+      f"Hour: {current_hour} | "
       f"ACOS: {acos:.1%} vs Target: {target_acos:.1%} | "
       f"Ceiling: ${ceiling:.2f}"
     )
@@ -130,13 +130,17 @@ class AOVBidOptimizer:
      
     # Fetch real-time AOV data once at the start
     logger.info("Fetching real-time AOV data...")
-    aov_fetcher.fetch_all()
+    try:
+      aov_fetcher.fetch_all()
+    except Exception as e:
+      logger.error(f"Failed to fetch AOV data: {e}")
+      logger.info("Continuing with default AOV values...")
      
     current_hour = datetime.now().hour
      
-    # Simplified query - AOV comes from aov_fetcher, not BigQuery
-    query = """
-    WITH keyword_performance AS (
+    # Query using YOUR actual table names: keywords and keyword_performance
+    query = f"""
+    WITH keyword_perf AS (
      SELECT 
       k.keyword_id,
       k.keyword_text,
@@ -149,8 +153,8 @@ class AOVBidOptimizer:
       SUM(kp.conversion_value) as sales_30d,
       SAFE_DIVIDE(CAST(SUM(kp.conversions) AS FLOAT64), CAST(SUM(kp.clicks) AS FLOAT64)) as cvr,
       SAFE_DIVIDE(SUM(kp.cost), NULLIF(SUM(kp.conversion_value), 0)) as acos
-     FROM `{}.{}.keywords` k
-     LEFT JOIN `{}.{}.keyword_performance` kp 
+     FROM `{settings.PROJECT_ID}.{settings.BIGQUERY_DATASET}.keywords` k
+     LEFT JOIN `{settings.PROJECT_ID}.{settings.BIGQUERY_DATASET}.keyword_performance` kp 
       ON k.keyword_id = kp.keyword_id
       AND kp.date >= DATE_SUB(CURRENT_DATE(), INTERVAL 30 DAY)
      WHERE k.state = 'ENABLED'
@@ -169,14 +173,14 @@ class AOVBidOptimizer:
      COALESCE(sales_30d, 0.0) as sales_30d,
      COALESCE(cvr, 0.0) as cvr,
      COALESCE(acos, 0.0) as acos
-    FROM keyword_performance
+    FROM keyword_perf
     WHERE clicks_30d >= 1
-    """.format(project=settings.PROJECT_ID, dataset=settings.BIGQUERY_DATASET)
+    """
      
     try:
       results = self.bq_client.query(query).result()
     except Exception as e:
-      logger.error(f"Query failed: {}")
+      logger.error(f"Query failed: {e}")
       return []
      
     optimizations = []
@@ -186,11 +190,15 @@ class AOVBidOptimizer:
        
       # Get real-time AOV from fetcher using campaign_id
       campaign_id = keyword_data.get('campaign_id')
-      aov_data = aov_fetcher.get_aov(campaign_id)
+      try:
+        aov_data = aov_fetcher.get_aov(campaign_id)
+        keyword_data['aov'] = aov_data.aov
+        keyword_data['aov_confidence'] = aov_data.confidence
+      except Exception as e:
+        logger.warning(f"Failed to get AOV for campaign {campaign_id}: {e}")
+        keyword_data['aov'] = 30.0  # Default fallback
+        keyword_data['aov_confidence'] = 'low'
        
-      # Inject AOV into keyword data
-      keyword_data['aov'] = aov_data.aov
-      keyword_data['aov_confidence'] = aov_data.confidence
       keyword_data['target_acos'] = 0.30 # Assuming a default target ACOS, or fetch from config/DB
        
       try:
@@ -202,12 +210,12 @@ class AOVBidOptimizer:
             'keyword_text': keyword_data['keyword_text'],
             'campaign_id': campaign_id,
             'current_bid': keyword_data['current_bid'],
-            'aov_confidence': aov_data.confidence,
+            'aov_confidence': keyword_data.get('aov_confidence', 'low'),
             **optimization,
             'timestamp': datetime.utcnow().isoformat()
           })
       except Exception as e:
-        logger.error(f"Failed to optimize keyword {keyword_data.get('keyword_id')}: {}")
+        logger.error(f"Failed to optimize keyword {keyword_data.get('keyword_id')}: {e}")
         continue
      
     logger.info(f"Found {len(optimizations)} keywords to optimize")
@@ -233,7 +241,7 @@ class AOVBidOptimizer:
       job.result()
       logger.info(f"Logged {len(optimizations)} optimizations to BigQuery")
     except Exception as e:
-      logger.error(f"Failed to log optimizations: {}")
+      logger.error(f"Failed to log optimizations: {e}")
 
 def run_aov_optimizer():
   """Entry point for Cloud Run job"""
@@ -253,7 +261,7 @@ def run_aov_optimizer():
      
     print("\n📊 Optimization Summary by AOV Tier:")
     for tier, count in sorted(tier_summary.items()):
-      print(f"  Tier {}: {} keywords") # Fixed placeholder
+      print(f"  Tier {tier}: {count} keywords")
      
     print(f"\n✅ Total optimizations: {len(optimizations)}")
   else:
@@ -261,9 +269,3 @@ def run_aov_optimizer():
 
 if __name__ == "__main__":
   run_aov_optimizer()
-
-
-
-Evaluate
-
-Compare
