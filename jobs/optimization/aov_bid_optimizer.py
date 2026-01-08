@@ -29,7 +29,7 @@ try:
     from backend.shared.token_manager import token_manager
     from backend.core.config import (
         AOV_TIERS, PERFORMANCE_MULTIPLIERS, MATCH_TYPE_MULTIPLIERS,
-        get_time_multiplier, MAX_BID_AS_PERCENT_OF_AOV, settings
+        get_time_multiplier, MAX_BID_AS_PERCENT_OF_AOV, TARGET_ACOS_DEFAULT, settings
     )
     from backend.aov_fetcher import aov_fetcher
 except ImportError:
@@ -38,7 +38,7 @@ except ImportError:
     from shared.token_manager import token_manager
     from core.config import (
         AOV_TIERS, PERFORMANCE_MULTIPLIERS, MATCH_TYPE_MULTIPLIERS,
-        get_time_multiplier, MAX_BID_AS_PERCENT_OF_AOV, settings
+        get_time_multiplier, MAX_BID_AS_PERCENT_OF_AOV, TARGET_ACOS_DEFAULT, settings
     )
     sys.path.insert(0, str(Path(__file__).parent.parent))
     from aov_fetcher import aov_fetcher
@@ -137,7 +137,7 @@ class AOVBidOptimizer:
         
         # Calculate bid adjustment based on performance
         acos = float(keyword_data.get('acos') or 0)
-        target_acos = float(keyword_data.get('target_acos') or settings.TARGET_ACOS_DEFAULT)
+        target_acos = float(keyword_data.get('target_acos') or TARGET_ACOS_DEFAULT)
         
         if acos == 0 or acos < target_acos * 0.7:
             # Performing well - increase bid
@@ -197,6 +197,12 @@ class AOVBidOptimizer:
         
         # Blend: 70% suggested, 30% AOV-based
         blend_weight = settings.SUGGEST_BLEND
+        
+        # Validate blend weight is between 0 and 1
+        if not (0 <= blend_weight <= 1):
+            logger.warning(f"Invalid SUGGEST_BLEND value: {blend_weight}, using default 0.70")
+            blend_weight = 0.70
+        
         blended = (suggested_bid * blend_weight) + (aov_bid * (1 - blend_weight))
         
         # Apply ceiling from AOV calculation
@@ -360,7 +366,7 @@ class AOVBidOptimizer:
                 
                 kw['aov'] = aov_data.aov
                 kw['aov_confidence'] = aov_data.confidence
-                kw['target_acos'] = settings.TARGET_ACOS_DEFAULT
+                kw['target_acos'] = TARGET_ACOS_DEFAULT
                 
                 # Calculate AOV-based bid
                 aov_calc = self.calculate_aov_based_bid(kw, self.current_hour)
