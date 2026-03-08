@@ -173,7 +173,16 @@ class AmazonAdsClient:
             params['campaignIdFilter'] = campaign_id
         
         logger.info(f"Fetching keywords (campaign={campaign_id}, state={state_filter})...")
-        response = self._make_request('GET', '/v2/sp/keywords', params=params)
+        # FIX: v3 API - POST /sp/keywords/list replaces GET /v2/sp/keywords
+        body = {"maxResults": 1000}
+        if state_filter:
+            body['stateFilter'] = [state_filter]
+        if campaign_id:
+            body['campaignIdFilter'] = [str(campaign_id)]
+        params = {}
+        response = self._make_request('POST', '/sp/keywords/list', json=body)
+        if isinstance(response, dict):
+            response = response.get('keywords', [])
         
         keywords = response if isinstance(response, list) else []
         logger.info(f"✅ Retrieved {len(keywords)} keywords")
@@ -196,7 +205,7 @@ class AmazonAdsClient:
         }]
         
         logger.info(f"Updating keyword {keyword_id} bid to ${new_bid:.2f}")
-        response = self._make_request('PUT', '/v2/sp/keywords', json=data)
+        response = self._make_request('PUT', '/sp/keywords', json=data)
         logger.info(f"✅ Keyword bid updated")
         return response
     
@@ -252,7 +261,7 @@ class AmazonAdsClient:
                 )
         
         logger.info(f"Batch updating {len(updates)} keyword bids")
-        response = self._make_request('PUT', '/v2/sp/keywords', json=data)
+        response = self._make_request('PUT', '/sp/keywords', json=data)
         logger.info(f"✅ Batch update complete")
         return response
     
@@ -286,7 +295,7 @@ class AmazonAdsClient:
         """
         # Amazon Ads API v2 bid recommendations endpoint
         # Note: Newer API versions use /sp/targets/bid/recommendations
-        endpoint = '/v2/sp/keywords/bidRecommendations'
+        endpoint = '/sp/targets/bid/recommendations'  # FIX: v3 endpoint
         
         data = {
             'adGroupId': ad_group_id,
