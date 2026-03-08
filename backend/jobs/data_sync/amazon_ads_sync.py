@@ -65,6 +65,17 @@ class AmazonAdsSync:
             logger.error("Continuing...")
         
         logger.info("")
+
+        # Sync search terms for keyword harvesting
+        try:
+            logger.info("📊 Step 4: Syncing search term reports...")
+            search_data = self.sync_search_terms()
+            logger.info(f"✅ Synced {len(search_data)} search term records")
+        except Exception as e:
+            logger.error(f"❌ Search term sync failed: {e}")
+            logger.error("Continuing...")
+
+        logger.info("")
         logger.info("=" * 60)
         logger.info("✅ Amazon Ads Data Sync Complete")
         logger.info("=" * 60)
@@ -383,6 +394,45 @@ class AmazonAdsSync:
             logger.error(f"❌ Failed to load data to {table_name}: {e}")
             raise
 
+
+    def sync_search_terms(self) -> list:
+        """Sync search term report to BigQuery for keyword harvesting"""
+        from datetime import datetime, timezone, timedelta
+        end_date = datetime.now(timezone.utc)
+        start_date = end_date - timedelta(days=30)
+        report_config = {
+            "name": "Search Term Report",
+            "startDate": start_date.strftime("%Y-%m-%d"),
+            "endDate": end_date.strftime("%Y-%m-%d"),
+            "configuration": {
+                "adProduct": "SPONSORED_PRODUCTS",
+                "groupBy": ["searchTerm"],
+                "columns": [
+                    "campaignId", "campaignName", "adGroupId", "adGroupName",
+                    "keywordId", "keywordBid", "matchType", "searchTerm",
+                    "impressions", "clicks", "cost",
+                    "purchases14d", "sales14d", "acosClicks14d"
+                ],
+                "reportTypeId": "spSearchTerm",
+                "timeUnit": "SUMMARY",
+                "format": "GZIP_JSON"
+            }
+        }
+        logger.info("Requesting search term report from Amazon...")
+        try:
+            data = self.amazon_client.request_and_download_report_v3(report_config, max_wait=300)
+            if not data:
+                logger.warning("⚠️ No search term data returned")
+                return []
+            today = end_date.strftime("%Y-%m-%d")
+            for row in data:
+                row["date"] = today
+            self._load_to_bigquery("search_term_reports", data)
+            logger.info(f"✅ Synced {len(data)} search terms")
+            return data
+        except Exception as e:
+            logger.error(f"❌ Search term sync failed: {e}")
+            return []
 
 def run_amazon_ads_sync():
     """Entry point for the Amazon Ads sync job"""

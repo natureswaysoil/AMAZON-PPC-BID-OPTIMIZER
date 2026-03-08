@@ -33,12 +33,12 @@ def run_keyword_harvester():
         existing = _get_existing_keywords(bq, dataset)
         logger.info(f"   Loaded {len(existing)} existing keyword+campaign combos")
 
-        logger.info("📊 Step 2: Requesting search term report (last 30 days)...")
-        search_terms = _get_search_term_report(client)
+        logger.info("📊 Step 2: Loading search terms from BigQuery...")
+        search_terms = _get_search_terms_from_bq(bq, dataset)
         logger.info(f"   Found {len(search_terms)} search terms")
 
         if not search_terms:
-            logger.warning("⚠️ No search terms returned")
+            logger.warning("⚠️ No search terms in BigQuery yet - run ads-data-sync first")
             return
 
         logger.info("🔍 Step 3: Filtering candidates...")
@@ -61,6 +61,32 @@ def run_keyword_harvester():
     except Exception as e:
         logger.error(f"❌ Keyword harvester failed: {e}", exc_info=True)
         sys.exit(1)
+
+def _get_search_terms_from_bq(bq, dataset) -> list:
+    """Read search terms from BigQuery search_term_reports table"""
+    try:
+        rows = bq.query(f"""
+            SELECT
+                search_term as searchTerm,
+                CAST(campaign_id AS STRING) as campaignId,
+                CAST(ad_group_id AS STRING) as adGroupId,
+                SUM(clicks) as clicks,
+                SUM(conversions) as purchases14d,
+                SUM(conversion_value) as sales14d,
+                SUM(cost) as cost,
+                '' as matchType,
+                0.75 as keywordBid
+            FROM `{bq.project}.{dataset}.search_term_reports`
+            WHERE date >= DATE_SUB(CURRENT_DATE(), INTERVAL 30 DAY)
+            GROUP BY search_term, campaign_id, ad_group_id
+            HAVING SUM(clicks) >= 1
+            ORDER BY SUM(clicks) DESC
+            LIMIT 5000
+        """).result()
+        return [dict(r) for r in rows]
+    except Exception as e:
+        logger.error(f"Failed to load search terms from BQ: {e}")
+        return []
 
 def _get_existing_keywords(bq, dataset):
     try:
