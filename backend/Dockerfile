@@ -13,5 +13,5 @@ COPY . ./backend/
 ENV PYTHONUNBUFFERED=1
 ENV PYTHONPATH=/app
 
-# Default command (overridden by Cloud Run Job)
-CMD ["python", "main.py"]
+# Fixed: main.py is at /app/backend/main.py
+CMD ["python", "backend/main.py"]
