@@ -48,6 +48,9 @@ def main():
     if job_type in ['aov_optimizer', 'bid_optimizer']:
         from jobs.optimization.aov_bid_optimizer import run_aov_optimizer
         run_aov_optimizer()
+    elif job_type == 'keyword_harvester':
+        from jobs.optimization.keyword_harvester import run_keyword_harvester
+        run_keyword_harvester()
     elif job_type == 'ads_sync':
         from jobs.data_sync.amazon_ads_sync import run_amazon_ads_sync
         run_amazon_ads_sync()
