@@ -13,5 +13,5 @@ COPY . ./backend/
 ENV PYTHONUNBUFFERED=1
 ENV PYTHONPATH=/app
 
-# Run main.py from backend directory
-CMD ["python", "backend/main.py"]
+# Default command (overridden by Cloud Run Job)
+CMD ["python", "main.py"]

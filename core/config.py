@@ -1,6 +1,5 @@
 import os
 from dataclasses import dataclass
-from pydantic_settings import BaseSettings
 
 @dataclass
 class AOVTier:
@@ -65,54 +64,50 @@ MAX_BID_AS_PERCENT_OF_AOV = 0.07  # Never bid more than 7% of AOV
 MIN_CONVERSIONS_FOR_PROMOTION = 2
 TARGET_ACOS_DEFAULT = 0.30
 
-class Settings(BaseSettings):
-    """Application settings using pydantic-settings"""
-    PROJECT_ID: str = ""
-    BIGQUERY_DATASET: str = "amazon_ppc"
-    REGION: str = "us-central1"
-    TIMEZONE: str = "America/New_York"
-    
+class Settings:
+    PROJECT_ID: str = os.getenv('PROJECT_ID', os.getenv('GOOGLE_CLOUD_PROJECT', 'amazon-ppc-474902'))
+    BIGQUERY_DATASET: str = os.getenv('BIGQUERY_DATASET', 'amazon_ppc')
+    REGION: str = os.getenv('REGION', 'us-central1')
+
+    # Timezone (so prime hours are correct)
+    TIMEZONE: str = os.getenv("TIMEZONE", "America/New_York")
+
     # Bid rails
-    MIN_BID: float = 0.35
-    MAX_BID: float = 7.00
-    
+    MIN_BID: float = float(os.getenv("MIN_BID", "0.35"))
+    MAX_BID: float = float(os.getenv("MAX_BID", "7.00"))
+
     # Suggested bid blending
-    SUGGEST_BLEND: float = 0.70
-    MAX_UP_PCT_PER_RUN: float = 0.20
-    MAX_DOWN_PCT_PER_RUN: float = 0.25
-    
+    SUGGEST_BLEND: float = float(os.getenv("SUGGEST_BLEND", "0.70"))
+    MAX_UP_PCT_PER_RUN: float = float(os.getenv("MAX_UP_PCT_PER_RUN", "0.20"))
+    MAX_DOWN_PCT_PER_RUN: float = float(os.getenv("MAX_DOWN_PCT_PER_RUN", "0.25"))
+
     # Safety gates
-    PAUSE_CLICKS_MIN: int = 15
-    PAUSE_SPEND_MIN: float = 18.0
-    LOSE_CLICKS_MIN: int = 10
-    LOSE_SPEND_MIN: float = 10.0
-    
+    PAUSE_CLICKS_MIN: int = int(os.getenv("PAUSE_CLICKS_MIN", "15"))
+    PAUSE_SPEND_MIN: float = float(os.getenv("PAUSE_SPEND_MIN", "18.0"))
+    LOSE_CLICKS_MIN: int = int(os.getenv("LOSE_CLICKS_MIN", "10"))
+    LOSE_SPEND_MIN: float = float(os.getenv("LOSE_SPEND_MIN", "10.0"))
+
     # Amazon Ads API Region
-    AMAZON_ADS_REGION: str = "NA"
+    AMAZON_ADS_REGION: str = os.getenv("AMAZON_ADS_REGION", "NA")
     
-    # Secret names
-    AMAZON_CLIENT_ID_SECRET: str = "amazon_client_id"
-    AMAZON_CLIENT_SECRET_SECRET: str = "amazon_client_secret"
-    AMAZON_REFRESH_TOKEN_SECRET: str = "amazon_refresh_token"
-    AMAZON_PROFILE_ID_SECRET: str = "amazon_profile_id"
-    
-    class Config:
-        env_file = ".env"
-        env_file_encoding = 'utf-8'
-        
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
-        # If PROJECT_ID not set, try GOOGLE_CLOUD_PROJECT
-        if not self.PROJECT_ID:
-            self.PROJECT_ID = os.getenv('GOOGLE_CLOUD_PROJECT', '')
+    # Region to endpoint mapping
+    AMAZON_ADS_ENDPOINTS = {
+        "NA": "https://advertising-api.amazon.com",
+        "EU": "https://advertising-api-eu.amazon.com",
+        "FE": "https://advertising-api-fe.amazon.com"
+    }
+
+    # Secret names (make sure these match Secret Manager)
+    AMAZON_CLIENT_ID_SECRET: str = os.getenv("AMAZON_CLIENT_ID_SECRET", "amazon_client_id")
+    AMAZON_CLIENT_SECRET_SECRET: str = os.getenv("AMAZON_CLIENT_SECRET_SECRET", "amazon_client_secret")
+    AMAZON_REFRESH_TOKEN_SECRET: str = os.getenv("AMAZON_REFRESH_TOKEN_SECRET", "amazon_refresh_token")
+    AMAZON_PROFILE_ID_SECRET: str = os.getenv("AMAZON_PROFILE_ID_SECRET", "amazon_profile_id")
     
     def get_amazon_ads_endpoint(self) -> str:
         """Get the correct Amazon Ads API endpoint for configured region"""
-        endpoints = {
-            "NA": "https://advertising-api.amazon.com",
-            "EU": "https://advertising-api-eu.amazon.com",
-            "FE": "https://advertising-api-fe.amazon.com"
-        }
-        return endpoints.get(self.AMAZON_ADS_REGION, endpoints["NA"])
+        return self.AMAZON_ADS_ENDPOINTS.get(
+            self.AMAZON_ADS_REGION,
+            self.AMAZON_ADS_ENDPOINTS["NA"]  # Default to NA
+        )
 
 settings = Settings()

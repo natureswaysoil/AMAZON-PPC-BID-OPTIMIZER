@@ -1,129 +1,83 @@
-"""
-Campaign-level AOV fetcher (works with current schema)
-"""
-
-import os
-import logging
-from typing import Dict
-from dataclasses import dataclass
+# backend/aov_fetcher.py
+# Note: Uses absolute imports relative to backend directory (Docker container root)
 from google.cloud import bigquery
+from dataclasses import dataclass
+from typing import Dict, Optional
+import logging
+from core.config import settings
 
 logger = logging.getLogger(__name__)
 
-PROJECT_ID = os.getenv("GCP_PROJECT", "amazon-ppc-474902")
-DATASET = os.getenv("BQ_DATASET", "amazon_ppc")
-DEFAULT_AOV = float(os.getenv("DEFAULT_AOV", "35.0"))
-
 @dataclass
-class CampaignAOV:
-    campaign_id: str
+class AOVData:
     aov: float
-    conversions: int
     confidence: str
-    source: str
-
+    orders: int = 0
+    
 class AOVFetcher:
-    """Fetches campaign-level AOV from BigQuery"""
+    """Fetches real-time AOV data from BigQuery or cache"""
     
     def __init__(self):
-        self.client = bigquery.Client(project=PROJECT_ID)
-        self._aov_14d: Dict[str, CampaignAOV] = {}
-        self._aov_30d: Dict[str, CampaignAOV] = {}
-        
-    def fetch_all(self) -> None:
-        """Fetch both 14d and 30d AOV maps"""
-        logger.info("Fetching campaign AOV data from BigQuery...")
-        self._aov_14d = self._fetch_aov_window(days=14, min_conversions=2)
-        self._aov_30d = self._fetch_aov_window(days=30, min_conversions=2)
-        logger.info(f"✓ Loaded AOV for {len(self._aov_14d)} campaigns (14d), "
-                   f"{len(self._aov_30d)} campaigns (30d)")
+        self._bq_client = None
+        self._aov_cache: Dict[str, AOVData] = {}
     
-    def _fetch_aov_window(self, days: int, min_conversions: int) -> Dict[str, CampaignAOV]:
-        """Fetch AOV for a specific time window"""
+    @property
+    def bq_client(self):
+        """Lazy initialization of BigQuery client"""
+        if self._bq_client is None:
+            self._bq_client = bigquery.Client(project=settings.PROJECT_ID)
+        return self._bq_client
+    
+    def fetch_all(self):
+        """Fetch all AOV data from BigQuery and cache it"""
         query = f"""
-        SELECT
-          campaign_id,
-          SAFE_DIVIDE(SUM(conversion_value), NULLIF(SUM(conversions), 0)) AS aov,
-          SUM(conversions) AS conversions,
-          SUM(conversion_value) AS total_sales,
-          COUNT(DISTINCT date) AS active_days
-        FROM `{PROJECT_ID}.{DATASET}.keyword_performance`
-        WHERE 
-          date >= DATE_SUB(CURRENT_DATE(), INTERVAL @days DAY)
-          AND conversion_value > 0
+        SELECT 
+            campaign_id,
+            AVG(aov_7d) as aov,
+            COUNT(DISTINCT order_id) as orders
+        FROM `{settings.PROJECT_ID}.{settings.BIGQUERY_DATASET}.asin_aov`
+        WHERE date >= DATE_SUB(CURRENT_DATE(), INTERVAL 7 DAY)
         GROUP BY campaign_id
-        HAVING 
-          conversions >= @min_conversions
-          AND aov > 10
         """
         
-        job_config = bigquery.QueryJobConfig(
-            query_parameters=[
-                bigquery.ScalarQueryParameter("days", "INT64", days),
-                bigquery.ScalarQueryParameter("min_conversions", "INT64", min_conversions),
-            ]
-        )
-        
         try:
-            rows = self.client.query(query, job_config=job_config).result()
-            result = {}
+            results = self.bq_client.query(query).result()
             
-            for row in rows:
-                campaign_id = row["campaign_id"]
-                aov = float(row["aov"])
-                conversions = int(row["conversions"])
-                active_days = int(row["active_days"])
+            for row in results:
+                campaign_id = str(row['campaign_id'])
+                aov = float(row['aov']) if row['aov'] else 30.0
+                orders = int(row['orders']) if row['orders'] else 0
                 
-                if conversions >= 10 and active_days >= 7:
-                    confidence = "high"
-                elif conversions >= 5:
-                    confidence = "medium"
+                # Determine confidence based on order volume
+                if orders >= 10:
+                    confidence = 'high'
+                elif orders >= 5:
+                    confidence = 'medium'
                 else:
-                    confidence = "low"
+                    confidence = 'low'
                 
-                result[campaign_id] = CampaignAOV(
-                    campaign_id=campaign_id,
+                self._aov_cache[campaign_id] = AOVData(
                     aov=aov,
-                    conversions=conversions,
                     confidence=confidence,
-                    source=f"{days}d"
+                    orders=orders
                 )
             
-            return result
+            logger.info(f"Fetched AOV data for {len(self._aov_cache)} campaigns")
             
         except Exception as e:
-            logger.error(f"BigQuery AOV fetch failed: {e}")
-            return {}
+            logger.error(f"Failed to fetch AOV data: {e}")
+            # Continue with empty cache - will use defaults
     
-    def get_aov(self, campaign_id: str) -> CampaignAOV:
-        """Get AOV for campaign with intelligent fallback"""
-        if campaign_id in self._aov_14d:
-            return self._aov_14d[campaign_id]
+    def get_aov(self, campaign_id: str) -> AOVData:
+        """Get AOV for a specific campaign"""
+        campaign_id = str(campaign_id)
         
-        if campaign_id in self._aov_30d:
-            return self._aov_30d[campaign_id]
+        if campaign_id in self._aov_cache:
+            return self._aov_cache[campaign_id]
         
-        logger.debug(f"Using default AOV for campaign {campaign_id}")
-        return CampaignAOV(
-            campaign_id=campaign_id,
-            aov=DEFAULT_AOV,
-            conversions=0,
-            confidence="default",
-            source="default"
-        )
-    
-    def get_aov_tier(self, campaign_id: str) -> str:
-        """Classify campaign into AOV tier for bid ceiling lookup"""
-        aov_data = self.get_aov(campaign_id)
-        aov = aov_data.aov
-        
-        if aov < 30:
-            return "L"
-        elif aov < 46:
-            return "M"
-        elif aov < 70:
-            return "H"
-        else:
-            return "X"
+        # Default fallback
+        logger.warning(f"No AOV data for campaign {campaign_id}, using default")
+        return AOVData(aov=30.0, confidence='low', orders=0)
 
+# Global singleton instance
 aov_fetcher = AOVFetcher()
