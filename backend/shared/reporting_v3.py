@@ -90,7 +90,13 @@ def request_and_download_report_v3(
 
         current_status = status.get("status")
 
-        if current_status == "SUCCESS":
+        logger.info(
+            "Amazon report %s status: %s",
+            report_id,
+            current_status,
+        )
+
+        if current_status in {"COMPLETED", "SUCCESS"}:
             download_url = status.get("url")
             if not download_url:
                 raise RuntimeError(
@@ -98,8 +104,12 @@ def request_and_download_report_v3(
                 )
 
             parsed_url = urlparse(download_url)
-            if not parsed_url.hostname or not parsed_url.hostname.endswith(".amazonaws.com"):
-                raise RuntimeError(f"Invalid download URL domain: {parsed_url.hostname}")
+            if not parsed_url.hostname or not parsed_url.hostname.endswith(
+                ".amazonaws.com"
+            ):
+                raise RuntimeError(
+                    f"Invalid download URL domain: {parsed_url.hostname}"
+                )
 
             report_response = requests.get(download_url, timeout=60)
             report_response.raise_for_status()
@@ -109,16 +119,26 @@ def request_and_download_report_v3(
                 for line in decompressed.decode("utf-8").splitlines()
                 if line.strip()
             ]
-            logger.info("Downloaded %s rows from report %s", len(rows), report_id)
+            logger.info(
+                "Downloaded %s rows from report %s",
+                len(rows),
+                report_id,
+            )
             return rows
 
-        if current_status == "FAILURE":
+        if current_status in {"FAILURE", "FAILED"}:
             reason = status.get("failureReason", "Unknown error")
             raise RuntimeError(f"Report generation failed: {reason}")
 
-        if current_status not in {"IN_PROGRESS", "PENDING"}:
+        if current_status not in {
+            "IN_PROGRESS",
+            "PENDING",
+            "PROCESSING",
+        }:
             logger.warning("Unknown report status: %s", current_status)
 
         time.sleep(10)
 
-    raise TimeoutError(f"Report {report_id} not ready after {max_wait}s")
+    raise TimeoutError(
+        f"Report {report_id} not ready after {max_wait}s"
+    )
