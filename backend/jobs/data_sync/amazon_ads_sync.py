@@ -10,6 +10,7 @@ from google.cloud import bigquery
 from core.bigquery_upsert import BigQueryUpsertLoader
 from core.config import settings
 from shared.amazon_client import amazon_client
+from shared.reporting_v3 import request_and_download_report_v3
 
 logger = logging.getLogger(__name__)
 
@@ -29,13 +30,20 @@ class AmazonAdsSync:
 
     @staticmethod
     def _error_details(exc: Exception) -> str:
-        """Return Amazon's response body when requests raises an HTTP error."""
+        """Return Amazon's response body when a request raises an HTTP error."""
         response = getattr(exc, "response", None)
         if response is None:
             return str(exc)
         body = (getattr(response, "text", "") or "").strip()
         status = getattr(response, "status_code", "unknown")
         return f"HTTP {status}: {body or str(exc)}"
+
+    def _request_report(self, report_config: Dict) -> List[Dict]:
+        return request_and_download_report_v3(
+            self.amazon_client,
+            report_config,
+            max_wait=300,
+        )
 
     def run(self):
         """Run all reports and fail the Cloud Run execution if all reports fail."""
@@ -80,7 +88,7 @@ class AmazonAdsSync:
         logger.info("Amazon Ads Data Sync Complete")
 
     def sync_keywords_performance(self) -> List[Dict]:
-        """Sync a rolling 30-day keyword summary."""
+        """Sync a rolling 30-day keyword-targeting summary."""
         end_date = datetime.now(timezone.utc)
         start_date = end_date - timedelta(days=30)
         report_config = {
@@ -89,14 +97,14 @@ class AmazonAdsSync:
             "endDate": end_date.strftime("%Y-%m-%d"),
             "configuration": {
                 "adProduct": "SPONSORED_PRODUCTS",
-                "groupBy": ["keyword"],
+                "groupBy": ["targeting"],
                 "columns": [
                     "campaignId", "campaignName", "adGroupId", "adGroupName",
-                    "keywordId", "keywordText", "keywordBid", "matchType",
+                    "keywordId", "keyword", "keywordBid", "matchType",
                     "impressions", "clicks", "cost", "purchases14d", "sales14d",
                     "purchases1d", "purchases7d", "purchases30d",
                 ],
-                "reportTypeId": "spTargetingKeyword",
+                "reportTypeId": "spTargeting",
                 "timeUnit": "SUMMARY",
                 "format": "GZIP_JSON",
             },
@@ -107,10 +115,7 @@ class AmazonAdsSync:
             report_config["endDate"],
         )
         try:
-            report_data = self.amazon_client.request_and_download_report_v3(
-                report_config,
-                max_wait=300,
-            )
+            report_data = self._request_report(report_config)
             if not report_data:
                 logger.warning("No keyword data returned")
                 return []
@@ -134,7 +139,7 @@ class AmazonAdsSync:
                 "groupBy": ["campaign"],
                 "columns": [
                     "date", "campaignId", "campaignName", "campaignStatus",
-                    "campaignBudget", "impressions", "clicks", "cost",
+                    "campaignBudgetAmount", "impressions", "clicks", "cost",
                     "purchases14d", "sales14d",
                 ],
                 "reportTypeId": "spCampaigns",
@@ -148,10 +153,7 @@ class AmazonAdsSync:
             report_config["endDate"],
         )
         try:
-            report_data = self.amazon_client.request_and_download_report_v3(
-                report_config,
-                max_wait=300,
-            )
+            report_data = self._request_report(report_config)
             if not report_data:
                 logger.warning("No campaign data returned")
                 return []
@@ -174,9 +176,10 @@ class AmazonAdsSync:
                 "adProduct": "SPONSORED_PRODUCTS",
                 "groupBy": ["advertiser"],
                 "columns": [
-                    "campaignId", "adGroupId", "asin", "sku", "impressions",
-                    "clicks", "cost", "purchases14d", "sales14d", "purchases1d",
-                    "purchases7d", "purchases30d", "unitsSold14d",
+                    "campaignId", "adGroupId", "advertisedAsin", "advertisedSku",
+                    "impressions", "clicks", "cost", "purchases14d", "sales14d",
+                    "purchases1d", "purchases7d", "purchases30d",
+                    "unitsSoldClicks14d",
                 ],
                 "reportTypeId": "spAdvertisedProduct",
                 "timeUnit": "SUMMARY",
@@ -189,10 +192,7 @@ class AmazonAdsSync:
             report_config["endDate"],
         )
         try:
-            report_data = self.amazon_client.request_and_download_report_v3(
-                report_config,
-                max_wait=300,
-            )
+            report_data = self._request_report(report_config)
             if not report_data:
                 logger.warning("No product data returned")
                 return []
@@ -226,10 +226,7 @@ class AmazonAdsSync:
             },
         }
         logger.info("Requesting search term report from Amazon...")
-        report_data = self.amazon_client.request_and_download_report_v3(
-            report_config,
-            max_wait=300,
-        )
+        report_data = self._request_report(report_config)
         if not report_data:
             logger.warning("No search term data returned")
             return []
@@ -251,7 +248,7 @@ class AmazonAdsSync:
             purchases = int(row.get("purchases14d", row.get("purchases", 0)))
             transformed.append({
                 "keyword_id": int(row.get("keywordId", 0)),
-                "keyword_text": row.get("keywordText", ""),
+                "keyword_text": row.get("keyword", row.get("keywordText", "")),
                 "keyword_bid": float(row.get("keywordBid", 0)),
                 "match_type": row.get("matchType", ""),
                 "campaign_id": int(row.get("campaignId", 0)),
@@ -285,7 +282,9 @@ class AmazonAdsSync:
                 "campaign_id": int(row.get("campaignId", 0)),
                 "campaign_name": row.get("campaignName", ""),
                 "campaign_status": row.get("campaignStatus", ""),
-                "campaign_budget": float(row.get("campaignBudget", 0)),
+                "campaign_budget": float(
+                    row.get("campaignBudgetAmount", row.get("campaignBudget", 0))
+                ),
                 "date": row.get("date", datetime.now(timezone.utc).date().isoformat()),
                 "impressions": int(row.get("impressions", 0)),
                 "clicks": int(row.get("clicks", 0)),
@@ -306,14 +305,16 @@ class AmazonAdsSync:
             transformed.append({
                 "campaign_id": int(row["campaignId"]) if row.get("campaignId") is not None else None,
                 "ad_group_id": int(row["adGroupId"]) if row.get("adGroupId") is not None else None,
-                "asin": row.get("asin", ""),
-                "sku": row.get("sku", ""),
+                "asin": row.get("advertisedAsin", row.get("asin", "")),
+                "sku": row.get("advertisedSku", row.get("sku", "")),
                 "impressions": int(row.get("impressions", 0)),
                 "clicks": int(row.get("clicks", 0)),
                 "cost": float(row.get("cost", 0)),
                 "purchases": int(row.get("purchases14d", row.get("purchases", 0))),
                 "sales": float(row.get("sales14d", row.get("sales", 0))),
-                "units_sold": int(row.get("unitsSold14d", 0)),
+                "units_sold": int(
+                    row.get("unitsSoldClicks14d", row.get("unitsSold14d", 0))
+                ),
                 "sync_date": sync_date,
                 "updated_at": now_utc,
             })
