@@ -2,37 +2,77 @@ name: Deploy to Cloud Run
 
 on:
   push:
-    branches: [ main ]
+    branches: [main]
   workflow_dispatch:
 
 env:
   PROJECT_ID: amazon-ppc-bid-optimizer
   REGION: us-central1
-  
+  GCP_WORKLOAD_IDENTITY_PROVIDER: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+  GCP_SERVICE_ACCOUNT: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+  GCP_CREDENTIALS_JSON: ${{ secrets.GCP_CREDENTIALS_JSON }}
+
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    
+
     permissions:
-      contents: 'read'
-      id-token: 'write'
-    
+      contents: read
+      id-token: write
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-      
-      - name: Authenticate to Google Cloud
-        uses: google-github-actions/auth@v2
+
+      - name: Validate Google Cloud authentication configuration
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          has_wif=false
+          has_json=false
+
+          if [[ -n "${GCP_WORKLOAD_IDENTITY_PROVIDER}" || -n "${GCP_SERVICE_ACCOUNT}" ]]; then
+            if [[ -z "${GCP_WORKLOAD_IDENTITY_PROVIDER}" || -z "${GCP_SERVICE_ACCOUNT}" ]]; then
+              echo "::error::Workload Identity authentication requires both GCP_WORKLOAD_IDENTITY_PROVIDER and GCP_SERVICE_ACCOUNT secrets."
+              exit 1
+            fi
+            has_wif=true
+          fi
+
+          if [[ -n "${GCP_CREDENTIALS_JSON}" ]]; then
+            has_json=true
+          fi
+
+          if [[ "${has_wif}" == "true" && "${has_json}" == "true" ]]; then
+            echo "::error::Configure exactly one Google Cloud authentication method: Workload Identity Federation or GCP_CREDENTIALS_JSON, not both."
+            exit 1
+          fi
+
+          if [[ "${has_wif}" == "false" && "${has_json}" == "false" ]]; then
+            echo "::error::No Google Cloud credentials are configured. Add both GCP_WORKLOAD_IDENTITY_PROVIDER and GCP_SERVICE_ACCOUNT, or add GCP_CREDENTIALS_JSON."
+            exit 1
+          fi
+
+      - name: Authenticate to Google Cloud with Workload Identity Federation
+        if: ${{ env.GCP_WORKLOAD_IDENTITY_PROVIDER != '' && env.GCP_SERVICE_ACCOUNT != '' && env.GCP_CREDENTIALS_JSON == '' }}
+        uses: google-github-actions/auth@v3
         with:
-          workload_identity_provider: '${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}'
-          service_account: '${{ secrets.GCP_SERVICE_ACCOUNT }}'
-      
+          workload_identity_provider: ${{ env.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ env.GCP_SERVICE_ACCOUNT }}
+
+      - name: Authenticate to Google Cloud with service-account JSON
+        if: ${{ env.GCP_CREDENTIALS_JSON != '' && env.GCP_WORKLOAD_IDENTITY_PROVIDER == '' && env.GCP_SERVICE_ACCOUNT == '' }}
+        uses: google-github-actions/auth@v3
+        with:
+          credentials_json: ${{ env.GCP_CREDENTIALS_JSON }}
+
       - name: Set up Cloud SDK
-        uses: google-github-actions/setup-gcloud@v2
-      
+        uses: google-github-actions/setup-gcloud@v3
+
       - name: Configure Docker
-        run: gcloud auth configure-docker gcr.io
-      
+        run: gcloud auth configure-docker gcr.io --quiet
+
       - name: Build Backend
         run: |
           docker build -t gcr.io/$PROJECT_ID/amazon-ppc-backend:$GITHUB_SHA \
@@ -40,7 +80,7 @@ jobs:
             -f backend/Dockerfile ./backend
           docker push gcr.io/$PROJECT_ID/amazon-ppc-backend:$GITHUB_SHA
           docker push gcr.io/$PROJECT_ID/amazon-ppc-backend:latest
-      
+
       - name: Build Frontend
         run: |
           docker build -t gcr.io/$PROJECT_ID/amazon-ppc-frontend:$GITHUB_SHA \
@@ -48,7 +88,7 @@ jobs:
             -f frontend/Dockerfile ./frontend
           docker push gcr.io/$PROJECT_ID/amazon-ppc-frontend:$GITHUB_SHA
           docker push gcr.io/$PROJECT_ID/amazon-ppc-frontend:latest
-      
+
       - name: Deploy Backend Jobs
         run: |
           gcloud run jobs deploy ads-data-sync \
@@ -59,7 +99,7 @@ jobs:
             --cpu=2 \
             --max-retries=2 \
             --task-timeout=30m
-          
+
           gcloud run jobs deploy orders-sync \
             --image=gcr.io/$PROJECT_ID/amazon-ppc-backend:$GITHUB_SHA \
             --region=$REGION \
@@ -68,16 +108,16 @@ jobs:
             --cpu=2 \
             --max-retries=2 \
             --task-timeout=30m
-          
+
           gcloud run jobs deploy bid-optimizer \
             --image=gcr.io/$PROJECT_ID/amazon-ppc-backend:$GITHUB_SHA \
             --region=$REGION \
-            --set-env-vars=JOB_TYPE=bid_optimizer \
+            --set-env-vars=JOB_TYPE=bid_optimizer,DRY_RUN=True \
             --memory=2Gi \
             --cpu=2 \
             --max-retries=1 \
             --task-timeout=1h
-      
+
       - name: Deploy Frontend
         run: |
           gcloud run deploy amazon-ppc-dashboard \
