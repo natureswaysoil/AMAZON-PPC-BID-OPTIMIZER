@@ -5,12 +5,20 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
+from google.cloud import bigquery
 
 BACKEND_DIR = Path(__file__).resolve().parents[1]
 if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 
 from core.bigquery_upsert import BigQueryUpsertLoader, TABLE_KEYS, build_merge_sql
+
+
+SCHEMA = [
+    bigquery.SchemaField("keyword_id", "INTEGER"),
+    bigquery.SchemaField("cost", "FLOAT"),
+    bigquery.SchemaField("sync_date", "DATE"),
+]
 
 
 def test_rolling_summary_keys_do_not_include_sync_date():
@@ -50,7 +58,7 @@ def test_build_merge_sql_rejects_missing_key_column():
 
 def test_loader_stages_merges_and_deletes_staging_table():
     client = MagicMock()
-    client.get_table.return_value = SimpleNamespace(schema=["schema-field"])
+    client.get_table.return_value = SimpleNamespace(schema=SCHEMA)
     client.create_table.side_effect = lambda table: table
 
     load_job = MagicMock()
@@ -76,7 +84,7 @@ def test_loader_stages_merges_and_deletes_staging_table():
 
 def test_loader_cleans_up_staging_table_when_merge_fails():
     client = MagicMock()
-    client.get_table.return_value = SimpleNamespace(schema=["schema-field"])
+    client.get_table.return_value = SimpleNamespace(schema=SCHEMA)
     client.create_table.side_effect = lambda table: table
     client.load_table_from_json.return_value = MagicMock()
     client.query.side_effect = RuntimeError("merge failed")
