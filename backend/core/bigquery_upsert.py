@@ -1,8 +1,8 @@
 """Idempotent BigQuery loading helpers.
 
-Reports are first loaded into a short-lived staging table, then merged into the
-production table using a stable business key. Re-running the same Amazon report
-updates the existing row instead of appending a duplicate.
+Amazon's SUMMARY reports are rolling snapshots. They are keyed by the advertising
+entity so each new sync replaces the prior snapshot. DAILY reports retain one row
+per entity and report date.
 """
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ import logging
 import re
 import uuid
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, Iterable, List, Sequence
+from typing import Any, Dict, List, Sequence
 
 from google.cloud import bigquery
 
@@ -19,21 +19,24 @@ logger = logging.getLogger(__name__)
 _IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 TABLE_KEYS: Dict[str, Sequence[str]] = {
-    "sp_keywords": ("keyword_id", "sync_date"),
+    # Rolling 30-day summary: one current row per keyword.
+    "sp_keywords": ("keyword_id",),
+    # Daily report: retain one row per campaign and report date.
     "sp_campaign_performance": ("campaign_id", "date"),
+    # Rolling 30-day summary: one current row per advertised product placement.
     "sp_advertised_product_metrics": (
         "campaign_id",
         "ad_group_id",
         "asin",
         "sku",
-        "sync_date",
     ),
+    # Rolling 30-day summary: one current row per search-term targeting context.
     "search_term_reports": (
         "campaignId",
         "adGroupId",
         "keywordId",
+        "matchType",
         "searchTerm",
-        "date",
     ),
 }
 
@@ -98,11 +101,7 @@ class BigQueryUpsertLoader:
         self.dataset = dataset
 
     def load(self, table_name: str, rows: List[Dict[str, Any]]) -> Dict[str, int]:
-        """Stage and merge rows into ``table_name``.
-
-        Returns counts useful for job logs. The source row count is exact;
-        BigQuery DML statistics are included when the client exposes them.
-        """
+        """Stage and merge rows into ``table_name``."""
         if not rows:
             return {"source_rows": 0, "affected_rows": 0}
         if table_name not in TABLE_KEYS:
