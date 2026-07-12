@@ -1,10 +1,8 @@
 import gzip
-import json
 import sys
 from pathlib import Path
 from unittest.mock import Mock, patch
 
-import pytest
 import requests
 
 BACKEND_DIR = Path(__file__).resolve().parents[1]
@@ -49,6 +47,29 @@ def test_duplicate_report_is_polled_and_downloaded():
     assert rows == [{"campaignId": "1"}]
     first_call = client._make_request.call_args_list[0]
     assert first_call.kwargs["max_retries"] == 1
+
+
+def test_transient_poll_error_is_retried():
+    client = Mock()
+    client._make_request.side_effect = [
+        {"reportId": "629d03ca-e4af-4989-99f6-382550f74481"},
+        requests.ConnectionError("temporary network failure"),
+        {
+            "status": "SUCCESS",
+            "url": "https://example.s3.amazonaws.com/report.gz",
+        },
+    ]
+    download = Mock(content=gzip.compress(b'{"campaignId":"1"}\n'))
+    download.raise_for_status.return_value = None
+
+    with (
+        patch("shared.reporting_v3.time.sleep"),
+        patch("shared.reporting_v3.requests.get", return_value=download),
+    ):
+        rows = request_and_download_report_v3(client, {"name": "test"})
+
+    assert rows == [{"campaignId": "1"}]
+    assert client._make_request.call_count == 3
 
 
 def test_report_payloads_use_amazon_returned_field_names():

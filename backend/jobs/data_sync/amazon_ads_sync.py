@@ -42,7 +42,7 @@ class AmazonAdsSync:
         return request_and_download_report_v3(
             self.amazon_client,
             report_config,
-            max_wait=300,
+            max_wait=900,
         )
 
     def run(self):
