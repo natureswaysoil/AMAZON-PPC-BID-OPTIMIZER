@@ -8,6 +8,7 @@ on:
 env:
   PROJECT_ID: amazon-ppc-bid-optimizer
   REGION: us-central1
+  BIGQUERY_DATASET: amazon_ppc
   GCP_WORKLOAD_IDENTITY_PROVIDER: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
   GCP_SERVICE_ACCOUNT: ${{ secrets.GCP_SERVICE_ACCOUNT }}
   GCP_CREDENTIALS_JSON: ${{ secrets.GCP_CREDENTIALS_JSON }}
@@ -91,10 +92,12 @@ jobs:
 
       - name: Deploy Backend Jobs
         run: |
+          COMMON_ENV="PROJECT_ID=$PROJECT_ID,GOOGLE_CLOUD_PROJECT=$PROJECT_ID,BIGQUERY_DATASET=$BIGQUERY_DATASET"
+
           gcloud run jobs deploy ads-data-sync \
             --image=gcr.io/$PROJECT_ID/amazon-ppc-backend:$GITHUB_SHA \
             --region=$REGION \
-            --set-env-vars=JOB_TYPE=ads_sync \
+            --set-env-vars="$COMMON_ENV,JOB_TYPE=ads_sync" \
             --memory=2Gi \
             --cpu=2 \
             --max-retries=2 \
@@ -103,7 +106,7 @@ jobs:
           gcloud run jobs deploy orders-sync \
             --image=gcr.io/$PROJECT_ID/amazon-ppc-backend:$GITHUB_SHA \
             --region=$REGION \
-            --set-env-vars=JOB_TYPE=orders_sync \
+            --set-env-vars="$COMMON_ENV,JOB_TYPE=orders_sync" \
             --memory=2Gi \
             --cpu=2 \
             --max-retries=2 \
@@ -112,7 +115,7 @@ jobs:
           gcloud run jobs deploy bid-optimizer \
             --image=gcr.io/$PROJECT_ID/amazon-ppc-backend:$GITHUB_SHA \
             --region=$REGION \
-            --set-env-vars=JOB_TYPE=bid_optimizer,DRY_RUN=True \
+            --set-env-vars="$COMMON_ENV,JOB_TYPE=bid_optimizer,DRY_RUN=True" \
             --memory=2Gi \
             --cpu=2 \
             --max-retries=1 \
