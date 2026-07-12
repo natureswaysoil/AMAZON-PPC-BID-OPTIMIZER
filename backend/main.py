@@ -17,6 +17,7 @@ logger = logging.getLogger(__name__)
 
 def _validate_optimizer_data():
     """Stop before optimization when required BigQuery inputs are absent."""
+    from google.api_core.exceptions import NotFound
     from google.cloud import bigquery
     from core.config import settings
 
@@ -31,7 +32,7 @@ def _validate_optimizer_data():
         table_id = f"{settings.PROJECT_ID}.{settings.BIGQUERY_DATASET}.{table_name}"
         try:
             client.get_table(table_id)
-        except Exception:
+        except NotFound:
             missing.append(table_name)
 
     if missing:
