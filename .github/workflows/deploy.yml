@@ -101,7 +101,7 @@ jobs:
             --memory=2Gi \
             --cpu=2 \
             --max-retries=2 \
-            --task-timeout=30m
+            --task-timeout=1h
 
           gcloud run jobs deploy bid-optimizer \
             --image=gcr.io/$PROJECT_ID/amazon-ppc-backend:$GITHUB_SHA \
