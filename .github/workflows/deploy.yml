@@ -103,15 +103,6 @@ jobs:
             --max-retries=2 \
             --task-timeout=30m
 
-          gcloud run jobs deploy orders-sync \
-            --image=gcr.io/$PROJECT_ID/amazon-ppc-backend:$GITHUB_SHA \
-            --region=$REGION \
-            --set-env-vars="$COMMON_ENV,JOB_TYPE=orders_sync" \
-            --memory=2Gi \
-            --cpu=2 \
-            --max-retries=2 \
-            --task-timeout=30m
-
           gcloud run jobs deploy bid-optimizer \
             --image=gcr.io/$PROJECT_ID/amazon-ppc-backend:$GITHUB_SHA \
             --region=$REGION \
