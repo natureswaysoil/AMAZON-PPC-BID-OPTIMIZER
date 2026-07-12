@@ -1,4 +1,9 @@
-"""Amazon Ads reporting v3 request, duplicate recovery, polling, and download."""
+"""Amazon Ads Reporting v3 duplicate-report recovery.
+
+This module is the sync-specific adapter for HTTP 425 responses. It submits a
+single report request, reuses Amazon's existing report ID when the request is a
+duplicate, and tolerates transient status-poll failures until the timeout.
+"""
 import gzip
 import json
 import logging
@@ -39,7 +44,7 @@ def request_and_download_report_v3(
     report_config: Dict,
     max_wait: int = 300,
 ) -> List[Dict]:
-    """Request a report, reuse duplicate reports, poll, download, and parse rows."""
+    """Request once, recover HTTP 425 duplicates, then poll and download."""
     endpoint = "/reporting/reports"
     logger.info("Requesting report: %s", report_config.get("name", "Unnamed Report"))
 
@@ -64,7 +69,25 @@ def request_and_download_report_v3(
     start_time = time.time()
 
     while time.time() - start_time < max_wait:
-        status = amazon_client._make_request("GET", status_endpoint)
+        try:
+            status = amazon_client._make_request("GET", status_endpoint)
+        except requests.exceptions.RequestException as exc:
+            logger.warning(
+                "Transient error polling Amazon report %s: %s; retrying",
+                report_id,
+                exc,
+            )
+            time.sleep(10)
+            continue
+        except Exception as exc:
+            logger.warning(
+                "Error polling Amazon report %s: %s; retrying until timeout",
+                report_id,
+                exc,
+            )
+            time.sleep(10)
+            continue
+
         current_status = status.get("status")
 
         if current_status == "SUCCESS":
@@ -81,11 +104,13 @@ def request_and_download_report_v3(
             report_response = requests.get(download_url, timeout=60)
             report_response.raise_for_status()
             decompressed = gzip.decompress(report_response.content)
-            return [
+            rows = [
                 json.loads(line)
                 for line in decompressed.decode("utf-8").splitlines()
                 if line.strip()
             ]
+            logger.info("Downloaded %s rows from report %s", len(rows), report_id)
+            return rows
 
         if current_status == "FAILURE":
             reason = status.get("failureReason", "Unknown error")
