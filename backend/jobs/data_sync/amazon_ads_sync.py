@@ -27,8 +27,18 @@ class AmazonAdsSync:
             self.dataset,
         )
 
+    @staticmethod
+    def _error_details(exc: Exception) -> str:
+        """Return Amazon's response body when requests raises an HTTP error."""
+        response = getattr(exc, "response", None)
+        if response is None:
+            return str(exc)
+        body = (getattr(response, "text", "") or "").strip()
+        status = getattr(response, "status_code", "unknown")
+        return f"HTTP {status}: {body or str(exc)}"
+
     def run(self):
-        """Run all report syncs while allowing independent report failures."""
+        """Run all reports and fail the Cloud Run execution if all reports fail."""
         logger.info("=" * 60)
         logger.info("Starting Amazon Ads Data Sync (API v3)")
         logger.info("Project: %s", settings.PROJECT_ID)
@@ -43,13 +53,29 @@ class AmazonAdsSync:
             ("advertised products", self.sync_advertised_product_metrics),
             ("search terms", self.sync_search_terms),
         )
+        successes = 0
+        failures = []
         for name, job in jobs:
             try:
                 rows = job()
+                successes += 1
                 logger.info("Synced %s %s records", len(rows), name)
             except Exception as exc:
-                logger.error("%s sync failed: %s", name.title(), exc)
+                details = self._error_details(exc)
+                failures.append((name, details))
+                logger.error("%s sync failed: %s", name.title(), details)
                 logger.error("Continuing with other syncs...")
+
+        if failures:
+            logger.warning(
+                "Amazon Ads sync summary: %s succeeded, %s failed",
+                successes,
+                len(failures),
+            )
+
+        if successes == 0:
+            summary = "; ".join(f"{name}: {details}" for name, details in failures)
+            raise RuntimeError(f"All Amazon Ads report syncs failed. {summary}")
 
         logger.info("Amazon Ads Data Sync Complete")
 
@@ -67,8 +93,8 @@ class AmazonAdsSync:
                 "columns": [
                     "campaignId", "campaignName", "adGroupId", "adGroupName",
                     "keywordId", "keywordText", "keywordBid", "matchType",
-                    "impressions", "clicks", "cost", "purchases", "sales",
-                    "purchases1d", "purchases7d", "purchases14d", "purchases30d",
+                    "impressions", "clicks", "cost", "purchases14d", "sales14d",
+                    "purchases1d", "purchases7d", "purchases30d",
                 ],
                 "reportTypeId": "spTargetingKeyword",
                 "timeUnit": "SUMMARY",
@@ -109,7 +135,7 @@ class AmazonAdsSync:
                 "columns": [
                     "date", "campaignId", "campaignName", "campaignStatus",
                     "campaignBudget", "impressions", "clicks", "cost",
-                    "purchases", "sales",
+                    "purchases14d", "sales14d",
                 ],
                 "reportTypeId": "spCampaigns",
                 "timeUnit": "DAILY",
@@ -149,8 +175,8 @@ class AmazonAdsSync:
                 "groupBy": ["advertiser"],
                 "columns": [
                     "campaignId", "adGroupId", "asin", "sku", "impressions",
-                    "clicks", "cost", "purchases", "sales", "purchases1d",
-                    "purchases7d", "purchases14d", "purchases30d", "unitsSold14d",
+                    "clicks", "cost", "purchases14d", "sales14d", "purchases1d",
+                    "purchases7d", "purchases30d", "unitsSold14d",
                 ],
                 "reportTypeId": "spAdvertisedProduct",
                 "timeUnit": "SUMMARY",
@@ -221,8 +247,8 @@ class AmazonAdsSync:
             clicks = int(row.get("clicks", 0))
             impressions = int(row.get("impressions", 0))
             cost = float(row.get("cost", 0))
-            sales = float(row.get("sales", 0))
-            purchases = int(row.get("purchases", 0))
+            sales = float(row.get("sales14d", row.get("sales", 0)))
+            purchases = int(row.get("purchases14d", row.get("purchases", 0)))
             transformed.append({
                 "keyword_id": int(row.get("keywordId", 0)),
                 "keyword_text": row.get("keywordText", ""),
@@ -254,7 +280,7 @@ class AmazonAdsSync:
         now_utc = datetime.now(timezone.utc).isoformat()
         for row in raw_data:
             cost = float(row.get("cost", 0))
-            sales = float(row.get("sales", 0))
+            sales = float(row.get("sales14d", row.get("sales", 0)))
             transformed.append({
                 "campaign_id": int(row.get("campaignId", 0)),
                 "campaign_name": row.get("campaignName", ""),
@@ -264,7 +290,7 @@ class AmazonAdsSync:
                 "impressions": int(row.get("impressions", 0)),
                 "clicks": int(row.get("clicks", 0)),
                 "cost": cost,
-                "purchases": int(row.get("purchases", 0)),
+                "purchases": int(row.get("purchases14d", row.get("purchases", 0))),
                 "sales": sales,
                 "acos": cost / sales if sales else 0,
                 "roas": sales / cost if cost else 0,
@@ -285,8 +311,8 @@ class AmazonAdsSync:
                 "impressions": int(row.get("impressions", 0)),
                 "clicks": int(row.get("clicks", 0)),
                 "cost": float(row.get("cost", 0)),
-                "purchases": int(row.get("purchases", 0)),
-                "sales": float(row.get("sales", 0)),
+                "purchases": int(row.get("purchases14d", row.get("purchases", 0))),
+                "sales": float(row.get("sales14d", row.get("sales", 0))),
                 "units_sold": int(row.get("unitsSold14d", 0)),
                 "sync_date": sync_date,
                 "updated_at": now_utc,
