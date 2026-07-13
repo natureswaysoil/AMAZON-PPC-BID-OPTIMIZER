@@ -21,6 +21,11 @@ _REPORT_ID_PATTERN = re.compile(
     re.IGNORECASE,
 )
 _POLL_INTERVAL_SECONDS = 30
+# If a report stays at PENDING/PROCESSING without any status change for this
+# many seconds, Amazon has likely stalled on its side (common when reusing a
+# 425 duplicate ID whose underlying job was already completed in a prior run).
+# Fail fast so the scheduler retries once Amazon's dedup window expires.
+_STUCK_STATUS_TIMEOUT_SECONDS = 900  # 15 minutes without a status change
 
 
 def _duplicate_report_id(exc: Exception) -> str | None:
@@ -64,10 +69,12 @@ def request_and_download_report_v3(
             json=report_config,
         )
         report_id = response.get("reportId")
+        reused_id = False
     except requests.exceptions.HTTPError as exc:
         report_id = _duplicate_report_id(exc)
         if not report_id:
             raise
+        reused_id = True
         logger.info("Reusing duplicate Amazon report: %s", report_id)
 
     if not report_id:
@@ -76,6 +83,7 @@ def request_and_download_report_v3(
     status_endpoint = f"/reporting/reports/{report_id}"
     start_time = time.time()
     last_status = None
+    last_status_change_time = time.time()
 
     while time.time() - start_time < max_wait:
         try:
@@ -101,6 +109,19 @@ def request_and_download_report_v3(
         if current_status != last_status:
             logger.info("Amazon report %s status: %s", report_id, current_status)
             last_status = current_status
+            last_status_change_time = time.time()
+        elif reused_id and current_status in {"PENDING", "PROCESSING"}:
+            # A 425-reused report that hasn't changed status in a long time is
+            # likely stalled on Amazon's side (the original job already ran and
+            # Amazon re-queued it under the same ID but deprioritised it).
+            # Fail fast so the scheduler can retry after the dedup window expires.
+            stuck_for = time.time() - last_status_change_time
+            if stuck_for >= _STUCK_STATUS_TIMEOUT_SECONDS:
+                raise TimeoutError(
+                    f"Reused report {report_id} stuck at {current_status} for "
+                    f"{stuck_for:.0f}s — Amazon likely stalled on a re-queued "
+                    "duplicate. Will retry on the next scheduled run."
+                )
 
         if current_status in {"COMPLETED", "SUCCESS"}:
             download_url = status.get("url")

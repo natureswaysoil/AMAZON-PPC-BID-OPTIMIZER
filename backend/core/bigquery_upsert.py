@@ -12,6 +12,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Sequence
 
+from google.api_core.exceptions import NotFound
 from google.cloud import bigquery
 
 logger = logging.getLogger(__name__)
@@ -32,11 +33,11 @@ TABLE_KEYS: Dict[str, Sequence[str]] = {
     ),
     # Rolling 30-day summary: one current row per search-term targeting context.
     "search_term_reports": (
-        "campaignId",
-        "adGroupId",
-        "keywordId",
-        "matchType",
-        "searchTerm",
+        "campaign_id",
+        "ad_group_id",
+        "keyword_id",
+        "match_type",
+        "search_term",
     ),
 }
 
@@ -100,6 +101,31 @@ class BigQueryUpsertLoader:
         self.project_id = project_id
         self.dataset = dataset
 
+    def _get_or_create_table(
+        self, table_id: str, rows: List[Dict[str, Any]]
+    ) -> bigquery.Table:
+        """Return the existing BigQuery table, creating it from row schema if absent."""
+        try:
+            return self.client.get_table(table_id)
+        except NotFound:
+            logger.info("Table %s not found — creating from row schema", table_id)
+            # Upload one row to a temp table with autodetect, then copy schema.
+            staging_name = f"_schema_detect_{uuid.uuid4().hex[:12]}"
+            staging_id = f"{self.project_id}.{self.dataset}.{staging_name}"
+            load_cfg = bigquery.LoadJobConfig(
+                write_disposition=bigquery.WriteDisposition.WRITE_TRUNCATE,
+                source_format=bigquery.SourceFormat.NEWLINE_DELIMITED_JSON,
+                autodetect=True,
+            )
+            job = self.client.load_table_from_json([rows[0]], staging_id, job_config=load_cfg)
+            job.result()
+            detected = self.client.get_table(staging_id)
+            new_table = bigquery.Table(table_id, schema=detected.schema)
+            created = self.client.create_table(new_table, exists_ok=True)
+            self.client.delete_table(staging_id, not_found_ok=True)
+            logger.info("Created table %s", table_id)
+            return created
+
     def load(self, table_name: str, rows: List[Dict[str, Any]]) -> Dict[str, int]:
         """Stage and merge rows into ``table_name``."""
         if not rows:
@@ -119,7 +145,7 @@ class BigQueryUpsertLoader:
         staging_name = f"_staging_{table_name}_{uuid.uuid4().hex[:12]}"
         staging_id = f"{self.project_id}.{self.dataset}.{staging_name}"
 
-        target = self.client.get_table(target_id)
+        target = self._get_or_create_table(target_id, rows)
         staging = bigquery.Table(staging_id, schema=target.schema)
         staging.expires = datetime.now(timezone.utc) + timedelta(hours=2)
         self.client.create_table(staging)

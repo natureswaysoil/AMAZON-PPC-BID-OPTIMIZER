@@ -80,13 +80,21 @@ class AmazonAdsClient:
                     **kwargs
                 )
                 
-                # Handle rate limiting (429)
+                # Handle rate limiting (429).  Sleep, then fall through to
+                # raise_for_status() so the except block can re-raise an
+                # HTTPError instead of a generic Exception.  This ensures
+                # callers that catch HTTPError (e.g. duplicate-report recovery
+                # in reporting_v3.py with max_retries=1) still work correctly.
                 if response.status_code == 429:
-                    retry_after = int(response.headers.get('Retry-After', 60))
+                    raw_retry_after = response.headers.get('Retry-After', '')
+                    try:
+                        retry_after = int(raw_retry_after)
+                    except (ValueError, TypeError):
+                        retry_after = 60  # fallback when header is an HTTP-date
                     logger.warning(f"⚠️ Rate limited. Waiting {retry_after}s before retry...")
                     time.sleep(retry_after)
-                    continue
-                
+                    # Fall through to raise_for_status() → HTTPError, caught below.
+
                 # Handle unauthorized (401) - token might be expired
                 if response.status_code == 401:
                     logger.warning("⚠️ Received 401 Unauthorized. Invalidating token and retrying...")
@@ -513,7 +521,8 @@ class AmazonAdsClient:
             
             current_status = status.get('status')
             
-            if current_status == 'SUCCESS':
+            # Amazon Ads Reporting v3 uses 'COMPLETED'; 'SUCCESS' kept for safety.
+            if current_status in ('COMPLETED', 'SUCCESS'):
                 # Step 3: Download report
                 download_url = status.get('url')
                 if not download_url:
@@ -548,11 +557,11 @@ class AmazonAdsClient:
                     logger.error(f"❌ Failed to download/parse report: {e}")
                     raise
             
-            elif current_status == 'FAILURE':
+            elif current_status in ('FAILURE', 'FAILED', 'CANCELLED'):
                 error = status.get('failureReason', 'Unknown error')
                 raise Exception(f"Report generation failed: {error}")
             
-            elif current_status in ['IN_PROGRESS', 'PENDING']:
+            elif current_status in ('IN_PROGRESS', 'PENDING', 'PROCESSING'):
                 logger.debug(f"⏳ Report status: {current_status}, waiting...")
                 time.sleep(10)
             
