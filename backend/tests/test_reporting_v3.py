@@ -10,7 +10,11 @@ if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 
 from jobs.data_sync.amazon_ads_sync import AmazonAdsSync
-from shared.reporting_v3 import _duplicate_report_id, request_and_download_report_v3
+from shared.reporting_v3 import (
+    _duplicate_report_id,
+    _sleep_until_next_poll,
+    request_and_download_report_v3,
+)
 
 
 def test_duplicate_report_id_is_extracted_from_425_response():
@@ -70,6 +74,16 @@ def test_transient_poll_error_is_retried():
 
     assert rows == [{"campaignId": "1"}]
     assert client._make_request.call_count == 3
+
+
+def test_poll_sleep_is_capped_to_remaining_timeout_budget():
+    with (
+        patch("shared.reporting_v3.time.time", return_value=108.0),
+        patch("shared.reporting_v3.time.sleep") as sleep,
+    ):
+        _sleep_until_next_poll(start_time=100.0, max_wait=10)
+
+    sleep.assert_called_once_with(2.0)
 
 
 def test_report_payloads_use_amazon_returned_field_names():
