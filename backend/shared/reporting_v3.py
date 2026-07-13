@@ -20,6 +20,7 @@ _REPORT_ID_PATTERN = re.compile(
     r"duplicate of\s*:\s*([0-9a-fA-F-]{36})",
     re.IGNORECASE,
 )
+_POLL_INTERVAL_SECONDS = 30
 
 
 def _duplicate_report_id(exc: Exception) -> str | None:
@@ -67,6 +68,7 @@ def request_and_download_report_v3(
 
     status_endpoint = f"/reporting/reports/{report_id}"
     start_time = time.time()
+    last_status = None
 
     while time.time() - start_time < max_wait:
         try:
@@ -77,7 +79,7 @@ def request_and_download_report_v3(
                 report_id,
                 exc,
             )
-            time.sleep(10)
+            time.sleep(_POLL_INTERVAL_SECONDS)
             continue
         except Exception as exc:
             logger.warning(
@@ -85,16 +87,13 @@ def request_and_download_report_v3(
                 report_id,
                 exc,
             )
-            time.sleep(10)
+            time.sleep(_POLL_INTERVAL_SECONDS)
             continue
 
         current_status = status.get("status")
-
-        logger.debug(
-            "Amazon report %s status: %s",
-            report_id,
-            current_status,
-        )
+        if current_status != last_status:
+            logger.info("Amazon report %s status: %s", report_id, current_status)
+            last_status = current_status
 
         if current_status in {"COMPLETED", "SUCCESS"}:
             download_url = status.get("url")
@@ -149,7 +148,7 @@ def request_and_download_report_v3(
             )
             return rows
 
-        if current_status in {"FAILURE", "FAILED"}:
+        if current_status in {"FAILURE", "FAILED", "CANCELLED"}:
             reason = status.get("failureReason", "Unknown error")
             raise RuntimeError(f"Report generation failed: {reason}")
 
@@ -160,8 +159,8 @@ def request_and_download_report_v3(
         }:
             logger.warning("Unknown report status: %s", current_status)
 
-        time.sleep(10)
+        time.sleep(_POLL_INTERVAL_SECONDS)
 
     raise TimeoutError(
-        f"Report {report_id} not ready after {max_wait}s"
+        f"Report {report_id} not ready after {max_wait}s; last status={last_status}"
     )
