@@ -15,6 +15,18 @@ from shared.reporting_v3 import request_and_download_report_v3
 logger = logging.getLogger(__name__)
 
 
+def _safe_int(value, default=0):
+    if value in (None, ""):
+        return default
+    return int(value)
+
+
+def _safe_float(value, default=0.0):
+    if value in (None, ""):
+        return default
+    return float(value)
+
+
 class AmazonAdsSync:
     """Sync Amazon Ads reports into BigQuery with idempotent upserts."""
 
@@ -42,7 +54,7 @@ class AmazonAdsSync:
         return request_and_download_report_v3(
             self.amazon_client,
             report_config,
-            max_wait=900,
+            max_wait=1800,
         )
 
     def run(self):
@@ -241,29 +253,29 @@ class AmazonAdsSync:
         sync_date = datetime.now(timezone.utc).date().isoformat()
         now_utc = datetime.now(timezone.utc).isoformat()
         for row in raw_data:
-            clicks = int(row.get("clicks", 0))
-            impressions = int(row.get("impressions", 0))
-            cost = float(row.get("cost", 0))
-            sales = float(row.get("sales14d", row.get("sales", 0)))
-            purchases = int(row.get("purchases14d", row.get("purchases", 0)))
+            clicks = _safe_int(row.get("clicks"))
+            impressions = _safe_int(row.get("impressions"))
+            cost = _safe_float(row.get("cost"))
+            sales = _safe_float(row.get("sales14d", row.get("sales")))
+            purchases = _safe_int(row.get("purchases14d", row.get("purchases")))
             transformed.append({
-                "keyword_id": int(row.get("keywordId", 0)),
+                "keyword_id": _safe_int(row.get("keywordId")),
                 "keyword_text": row.get("keyword", row.get("keywordText", "")),
-                "keyword_bid": float(row.get("keywordBid", 0)),
+                "keyword_bid": _safe_float(row.get("keywordBid")),
                 "match_type": row.get("matchType", ""),
-                "campaign_id": int(row.get("campaignId", 0)),
+                "campaign_id": _safe_int(row.get("campaignId")),
                 "campaign_name": row.get("campaignName", ""),
-                "ad_group_id": int(row.get("adGroupId", 0)),
+                "ad_group_id": _safe_int(row.get("adGroupId")),
                 "ad_group_name": row.get("adGroupName", ""),
                 "impressions": impressions,
                 "clicks": clicks,
                 "cost": cost,
                 "purchases": purchases,
                 "sales": sales,
-                "purchases_1d": int(row.get("purchases1d", 0)),
-                "purchases_7d": int(row.get("purchases7d", 0)),
-                "purchases_14d": int(row.get("purchases14d", 0)),
-                "purchases_30d": int(row.get("purchases30d", 0)),
+                "purchases_1d": _safe_int(row.get("purchases1d")),
+                "purchases_7d": _safe_int(row.get("purchases7d")),
+                "purchases_14d": _safe_int(row.get("purchases14d")),
+                "purchases_30d": _safe_int(row.get("purchases30d")),
                 "ctr": clicks / impressions if impressions else 0,
                 "cvr": purchases / clicks if clicks else 0,
                 "acos": cost / sales if sales else 0,
@@ -276,20 +288,20 @@ class AmazonAdsSync:
         transformed = []
         now_utc = datetime.now(timezone.utc).isoformat()
         for row in raw_data:
-            cost = float(row.get("cost", 0))
-            sales = float(row.get("sales14d", row.get("sales", 0)))
+            cost = _safe_float(row.get("cost"))
+            sales = _safe_float(row.get("sales14d", row.get("sales")))
             transformed.append({
-                "campaign_id": int(row.get("campaignId", 0)),
+                "campaign_id": _safe_int(row.get("campaignId")),
                 "campaign_name": row.get("campaignName", ""),
                 "campaign_status": row.get("campaignStatus", ""),
-                "campaign_budget": float(
+                "campaign_budget": _safe_float(
                     row.get("campaignBudgetAmount", row.get("campaignBudget", 0))
                 ),
                 "date": row.get("date", datetime.now(timezone.utc).date().isoformat()),
-                "impressions": int(row.get("impressions", 0)),
-                "clicks": int(row.get("clicks", 0)),
+                "impressions": _safe_int(row.get("impressions")),
+                "clicks": _safe_int(row.get("clicks")),
                 "cost": cost,
-                "purchases": int(row.get("purchases14d", row.get("purchases", 0))),
+                "purchases": _safe_int(row.get("purchases14d", row.get("purchases"))),
                 "sales": sales,
                 "acos": cost / sales if sales else 0,
                 "roas": sales / cost if cost else 0,
@@ -303,16 +315,16 @@ class AmazonAdsSync:
         now_utc = datetime.now(timezone.utc).isoformat()
         for row in raw_data:
             transformed.append({
-                "campaign_id": int(row["campaignId"]) if row.get("campaignId") is not None else None,
-                "ad_group_id": int(row["adGroupId"]) if row.get("adGroupId") is not None else None,
+                "campaign_id": _safe_int(row.get("campaignId"), None),
+                "ad_group_id": _safe_int(row.get("adGroupId"), None),
                 "asin": row.get("advertisedAsin", row.get("asin", "")),
                 "sku": row.get("advertisedSku", row.get("sku", "")),
-                "impressions": int(row.get("impressions", 0)),
-                "clicks": int(row.get("clicks", 0)),
-                "cost": float(row.get("cost", 0)),
-                "purchases": int(row.get("purchases14d", row.get("purchases", 0))),
-                "sales": float(row.get("sales14d", row.get("sales", 0))),
-                "units_sold": int(
+                "impressions": _safe_int(row.get("impressions")),
+                "clicks": _safe_int(row.get("clicks")),
+                "cost": _safe_float(row.get("cost")),
+                "purchases": _safe_int(row.get("purchases14d", row.get("purchases"))),
+                "sales": _safe_float(row.get("sales14d", row.get("sales"))),
+                "units_sold": _safe_int(
                     row.get("unitsSoldClicks14d", row.get("unitsSold14d", 0))
                 ),
                 "sync_date": sync_date,
