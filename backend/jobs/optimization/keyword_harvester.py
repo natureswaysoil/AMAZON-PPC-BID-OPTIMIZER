@@ -100,6 +100,8 @@ def _get_existing_keywords(bq, dataset):
         return set()
 
 def _get_search_term_report(client):
+    from shared.reporting_v3 import request_and_download_report_v3
+
     end_date = datetime.now(timezone.utc)
     start_date = end_date - timedelta(days=30)
     report_config = {
@@ -118,7 +120,7 @@ def _get_search_term_report(client):
         }
     }
     try:
-        data = client.request_and_download_report_v3(report_config, max_wait=300)
+        data = request_and_download_report_v3(client, report_config, max_wait=300)
         return data if data else []
     except Exception as e:
         logger.error(f"Search term report failed: {e}")
