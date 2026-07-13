@@ -132,7 +132,7 @@ class AmazonAdsSync:
                 logger.warning("No keyword data returned")
                 return []
             transformed = self._transform_keywords_data(report_data)
-            self._load_to_bigquery("sp_keywords", transformed)
+            self._load_to_bigquery("sp_keyword_performance", transformed)
             return transformed
         except Exception:
             logger.error("Report config: %s", json.dumps(report_config, indent=2))
@@ -209,7 +209,7 @@ class AmazonAdsSync:
                 logger.warning("No product data returned")
                 return []
             transformed = self._transform_product_data(report_data)
-            self._load_to_bigquery("sp_advertised_product_metrics", transformed)
+            self._load_to_bigquery("sp_product_performance", transformed)
             return transformed
         except Exception:
             logger.error("Report config: %s", json.dumps(report_config, indent=2))

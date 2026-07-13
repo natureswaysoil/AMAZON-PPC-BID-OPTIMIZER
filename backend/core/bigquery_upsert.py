@@ -20,11 +20,11 @@ _IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 TABLE_KEYS: Dict[str, Sequence[str]] = {
     # Rolling 30-day summary: one current row per keyword.
-    "sp_keywords": ("keyword_id",),
+    "sp_keyword_performance": ("keyword_id",),
     # Daily report: retain one row per campaign and report date.
     "sp_campaign_performance": ("campaign_id", "date"),
     # Rolling 30-day summary: one current row per advertised product placement.
-    "sp_advertised_product_metrics": (
+    "sp_product_performance": (
         "campaign_id",
         "ad_group_id",
         "asin",
