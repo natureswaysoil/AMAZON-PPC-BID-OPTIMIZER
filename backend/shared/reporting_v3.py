@@ -90,7 +90,7 @@ def request_and_download_report_v3(
 
         current_status = status.get("status")
 
-        logger.info(
+        logger.debug(
             "Amazon report %s status: %s",
             report_id,
             current_status,
@@ -114,11 +114,34 @@ def request_and_download_report_v3(
             report_response = requests.get(download_url, timeout=60)
             report_response.raise_for_status()
             decompressed = gzip.decompress(report_response.content)
-            rows = [
-                json.loads(line)
-                for line in decompressed.decode("utf-8").splitlines()
-                if line.strip()
-            ]
+            report_text = decompressed.decode("utf-8").strip()
+
+            if not report_text:
+                rows = []
+            else:
+                try:
+                    parsed = json.loads(report_text)
+                except json.JSONDecodeError:
+                    rows = [
+                        json.loads(line)
+                        for line in report_text.splitlines()
+                        if line.strip()
+                    ]
+                else:
+                    if isinstance(parsed, list):
+                        rows = parsed
+                    elif isinstance(parsed, dict):
+                        rows = [parsed]
+                    else:
+                        raise RuntimeError(
+                            "Unexpected Amazon report data type: "
+                            f"{type(parsed).__name__}"
+                        )
+
+            if not all(isinstance(row, dict) for row in rows):
+                raise RuntimeError(
+                    "Amazon report contained non-object rows"
+                )
             logger.info(
                 "Downloaded %s rows from report %s",
                 len(rows),
