@@ -40,6 +40,13 @@ def _duplicate_report_id(exc: Exception) -> str | None:
     return match.group(1) if match else None
 
 
+def _sleep_until_next_poll(start_time: float, max_wait: int) -> None:
+    """Sleep no longer than the remaining report wait budget."""
+    remaining = max_wait - (time.time() - start_time)
+    if remaining > 0:
+        time.sleep(min(_POLL_INTERVAL_SECONDS, remaining))
+
+
 def request_and_download_report_v3(
     amazon_client,
     report_config: Dict,
@@ -79,7 +86,7 @@ def request_and_download_report_v3(
                 report_id,
                 exc,
             )
-            time.sleep(_POLL_INTERVAL_SECONDS)
+            _sleep_until_next_poll(start_time, max_wait)
             continue
         except Exception as exc:
             logger.warning(
@@ -87,7 +94,7 @@ def request_and_download_report_v3(
                 report_id,
                 exc,
             )
-            time.sleep(_POLL_INTERVAL_SECONDS)
+            _sleep_until_next_poll(start_time, max_wait)
             continue
 
         current_status = status.get("status")
@@ -159,7 +166,7 @@ def request_and_download_report_v3(
         }:
             logger.warning("Unknown report status: %s", current_status)
 
-        time.sleep(_POLL_INTERVAL_SECONDS)
+        _sleep_until_next_poll(start_time, max_wait)
 
     raise TimeoutError(
         f"Report {report_id} not ready after {max_wait}s; last status={last_status}"
