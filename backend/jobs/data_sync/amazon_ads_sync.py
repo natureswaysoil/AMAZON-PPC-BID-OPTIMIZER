@@ -248,11 +248,34 @@ class AmazonAdsSync:
         if not report_data:
             logger.warning("No search term data returned")
             return []
-        today = end_date.strftime("%Y-%m-%d")
-        for row in report_data:
-            row["date"] = today
-        self._load_to_bigquery("search_term_reports", report_data)
-        return report_data
+        transformed = self._transform_search_terms_data(report_data, end_date)
+        self._load_to_bigquery("search_term_reports", transformed)
+        return transformed
+
+    def _transform_search_terms_data(
+        self, raw_data: List[Dict], report_date
+    ) -> List[Dict]:
+        today = report_date.strftime("%Y-%m-%d")
+        transformed = []
+        for row in raw_data:
+            transformed.append({
+                "campaign_id": _safe_int(row.get("campaignId")),
+                "campaign_name": str(row.get("campaignName") or ""),
+                "ad_group_id": _safe_int(row.get("adGroupId")),
+                "ad_group_name": str(row.get("adGroupName") or ""),
+                "keyword_id": _safe_int(row.get("keywordId")),
+                "keyword_bid": _safe_float(row.get("keywordBid")),
+                "match_type": str(row.get("matchType") or ""),
+                "search_term": str(row.get("searchTerm") or ""),
+                "impressions": _safe_int(row.get("impressions")),
+                "clicks": _safe_int(row.get("clicks")),
+                "cost": _safe_float(row.get("cost")),
+                "purchases_14d": _safe_int(row.get("purchases14d")),
+                "sales_14d": _safe_float(row.get("sales14d")),
+                "acos_clicks_14d": _safe_float(row.get("acosClicks14d")),
+                "date": today,
+            })
+        return transformed
 
     def _transform_keywords_data(self, raw_data: List[Dict]) -> List[Dict]:
         transformed = []

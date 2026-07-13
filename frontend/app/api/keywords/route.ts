@@ -8,53 +8,51 @@ const bigquery = new BigQuery({
 
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
-  const campaignId = searchParams.get('campaign_id');
+  const campaignIdParam = searchParams.get('campaign_id');
+
+  // Validate campaign_id is an integer before using it in a query.
+  const campaignId =
+    campaignIdParam !== null && /^\d+$/.test(campaignIdParam)
+      ? parseInt(campaignIdParam, 10)
+      : null;
 
   try {
+    // Queries the real sync table written by the ads_sync job (dataset: amazon_ppc).
     const query = `
-      SELECT 
-        k.keyword_id,
-        k.keyword_text,
-        k.match_type,
-        k.bid as current_bid,
-        k.state,
-        c.campaign_name,
-        COALESCE(SUM(dp.clicks), 0) as clicks_30d,
-        COALESCE(SUM(dp.conversions), 0) as conversions_30d,
-        COALESCE(SUM(dp.cost), 0) as cost_30d,
-        COALESCE(SUM(dp.sales), 0) as sales_30d,
-        SAFE_DIVIDE(SUM(dp.cost), NULLIF(SUM(dp.sales), 0)) as acos,
-        opt.new_bid as suggested_bid,
-        opt.aov_tier,
-        opt.performance_tier,
-        opt.reasoning
-      FROM \`amazon-ppc-bid-optimizer.amazon_data.keywords\` k
-      JOIN \`amazon-ppc-bid-optimizer.amazon_data.campaigns\` c 
-        ON k.campaign_id = c.campaign_id
-      LEFT JOIN \`amazon-ppc-bid-optimizer.amazon_data.daily_performance\` dp 
-        ON k.keyword_id = dp.keyword_id
-        AND dp.date >= DATE_SUB(CURRENT_DATE(), INTERVAL 30 DAY)
-      LEFT JOIN \`amazon-ppc-bid-optimizer.amazon_data.optimizer_dashboard\` opt
-        ON k.keyword_text = opt.keyword_text
-      ${campaignId ? `WHERE k.campaign_id = ${campaignId}` : 'WHERE k.keyword_id >= 2000'}
-      GROUP BY k.keyword_id, k.keyword_text, k.match_type, k.bid, k.state, 
-               c.campaign_name, opt.new_bid, opt.aov_tier, opt.performance_tier, opt.reasoning
-      ORDER BY cost_30d DESC
+      SELECT
+        kp.keyword_id,
+        kp.keyword_text,
+        kp.match_type,
+        kp.keyword_bid                  AS current_bid,
+        'ACTIVE'                        AS state,
+        kp.campaign_name,
+        kp.clicks                       AS clicks_30d,
+        kp.purchases                    AS conversions_30d,
+        kp.cost                         AS cost_30d,
+        kp.sales                        AS sales_30d,
+        kp.acos,
+        NULL                            AS suggested_bid,
+        NULL                            AS aov_tier,
+        NULL                            AS performance_tier,
+        NULL                            AS reasoning
+      FROM \`amazon-ppc-bid-optimizer.amazon_ppc.sp_keyword_performance\` kp
+      ${campaignId !== null ? `WHERE kp.campaign_id = ${campaignId}` : ''}
+      ORDER BY kp.cost DESC
     `;
 
     const [rows] = await bigquery.query({ query });
-    
+
     console.log(`Found ${rows.length} keywords`);
-    
-    return NextResponse.json({ 
+
+    return NextResponse.json({
       keywords: rows,
-      count: rows.length
+      count: rows.length,
     });
   } catch (error: any) {
     console.error('Keywords query failed:', error);
-    return NextResponse.json({ 
+    return NextResponse.json({
       error: error.message,
-      keywords: [] 
+      keywords: [],
     }, { status: 500 });
   }
 }
