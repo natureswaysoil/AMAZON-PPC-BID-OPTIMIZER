@@ -1,4 +1,5 @@
 import sys
+import threading
 from pathlib import Path
 from unittest.mock import Mock
 
@@ -49,3 +50,28 @@ def test_run_succeeds_when_at_least_one_report_succeeds():
     sync.sync_search_terms = Mock(side_effect=RuntimeError("report rejected"))
 
     sync.run()
+
+
+def test_run_starts_all_report_jobs_concurrently():
+    sync = AmazonAdsSync.__new__(AmazonAdsSync)
+    sync.amazon_client = Mock(region="NA", base_url="https://advertising-api.amazon.com")
+    sync.dataset = "amazon_ppc"
+
+    barrier = threading.Barrier(4)
+    started = []
+    lock = threading.Lock()
+
+    def report_job(name):
+        with lock:
+            started.append(name)
+        barrier.wait(timeout=2)
+        return []
+
+    sync.sync_keywords_performance = lambda: report_job("keywords")
+    sync.sync_campaign_performance = lambda: report_job("campaigns")
+    sync.sync_advertised_product_metrics = lambda: report_job("products")
+    sync.sync_search_terms = lambda: report_job("search terms")
+
+    sync.run()
+
+    assert set(started) == {"keywords", "campaigns", "products", "search terms"}

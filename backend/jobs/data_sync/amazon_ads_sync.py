@@ -2,6 +2,7 @@
 """Amazon Ads API v3 reporting sync."""
 import json
 import logging
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta, timezone
 from typing import Dict, List
 
@@ -58,7 +59,7 @@ class AmazonAdsSync:
         )
 
     def run(self):
-        """Run all reports and fail the Cloud Run execution if all reports fail."""
+        """Run all reports concurrently and fail if every report fails."""
         logger.info("=" * 60)
         logger.info("Starting Amazon Ads Data Sync (API v3)")
         logger.info("Project: %s", settings.PROJECT_ID)
@@ -75,16 +76,21 @@ class AmazonAdsSync:
         )
         successes = 0
         failures = []
-        for name, job in jobs:
-            try:
-                rows = job()
-                successes += 1
-                logger.info("Synced %s %s records", len(rows), name)
-            except Exception as exc:
-                details = self._error_details(exc)
-                failures.append((name, details))
-                logger.error("%s sync failed: %s", name.title(), details)
-                logger.error("Continuing with other syncs...")
+
+        logger.info("Submitting %s Amazon reports concurrently", len(jobs))
+        with ThreadPoolExecutor(max_workers=len(jobs)) as executor:
+            futures = {executor.submit(job): name for name, job in jobs}
+            for future in as_completed(futures):
+                name = futures[future]
+                try:
+                    rows = future.result()
+                    successes += 1
+                    logger.info("Synced %s %s records", len(rows), name)
+                except Exception as exc:
+                    details = self._error_details(exc)
+                    failures.append((name, details))
+                    logger.error("%s sync failed: %s", name.title(), details)
+                    logger.error("Continuing with other syncs...")
 
         if failures:
             logger.warning(
