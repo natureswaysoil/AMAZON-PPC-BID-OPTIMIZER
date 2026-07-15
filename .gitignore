@@ -57,6 +57,11 @@ node_modules/
 out/
 .cache/
 
+# The Python "lib/" ignore rule above is unanchored and was silently
+# swallowing frontend/lib/ (a real source directory, not a Python venv dir).
+!frontend/lib/
+!frontend/lib/**
+
 # Terraform
 *.tfstate
 *.tfstate.*

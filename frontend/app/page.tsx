@@ -18,12 +18,20 @@ export default function HomePage() {
               Live Amazon Sponsored Display optimization with AOV-aware dynamic bidding
             </p>
           </div>
-          <Link 
-            href="/campaigns"
-            className="px-4 py-2 bg-green-600 hover:bg-green-700 text-white font-medium rounded"
-          >
-            + New Campaign
-          </Link>
+          <div className="flex gap-3">
+            <Link
+              href="/products"
+              className="px-4 py-2 bg-white border border-gray-300 hover:bg-gray-50 text-gray-700 font-medium rounded"
+            >
+              Products
+            </Link>
+            <Link
+              href="/campaigns"
+              className="px-4 py-2 bg-green-600 hover:bg-green-700 text-white font-medium rounded"
+            >
+              + New Campaign
+            </Link>
+          </div>
         </div>
       </header>
 
