@@ -103,10 +103,14 @@ jobs:
             --max-retries=2 \
             --task-timeout=1h
 
+          # DRY_RUN=False (confirmed 2026-07-15): bid-optimizer's AOV-tier
+          # recommendations now auto-apply via apply_bid_changes(). Safety
+          # rails live in calculate_optimal_bid() - 7% of AOV ceiling, +-20/25%
+          # per-run movement caps, zero-conversion pause gates, 5% noise floor.
           gcloud run jobs deploy bid-optimizer \
             --image=gcr.io/$PROJECT_ID/amazon-ppc-backend:$GITHUB_SHA \
             --region=$REGION \
-            --set-env-vars="$COMMON_ENV,JOB_TYPE=bid_optimizer,DRY_RUN=True" \
+            --set-env-vars="$COMMON_ENV,JOB_TYPE=bid_optimizer,DRY_RUN=False" \
             --memory=2Gi \
             --cpu=2 \
             --max-retries=1 \
