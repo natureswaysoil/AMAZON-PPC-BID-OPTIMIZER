@@ -1,0 +1,22 @@
+# Core Framework
+fastapi>=0.115.0
+uvicorn[standard]>=0.30.0
+gunicorn>=22.0.0
+
+# HTTP Client & Parsing
+requests>=2.32.0
+
+# Google Cloud Secret Manager
+google-cloud-secret-manager>=2.21.0
+
+# Templating for Dashboard
+jinja2>=3.1.0
+
+# Security & Validation
+pydantic>=2.9.0
+python-multipart>=0.0.12
+
+# Optional: Better performance in production
+uvloop>=0.21.0; platform_system != "Windows"
+httptools>=0.6.0
+google-cloud-storage>=2.16.0
