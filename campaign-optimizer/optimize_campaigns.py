@@ -1267,19 +1267,6 @@ def generate_keywords_for_product(product_row: dict, limit: int = 30) -> List[st
             break
     return out
 
-@app.get("/api/products")
-def api_products() -> JSONResponse:
-    try:
-        raw_rows = load_products()
-        rows = clean_product_rows(raw_rows)
-        products = [normalized_product(r) for r in rows]
-        return JSONResponse({
-            "raw_count": len(raw_rows),
-            "count": len(products),
-            "products": products
-        })
-    except Exception as e:
-        return JSONResponse({"error": True, "message": str(e)}, status_code=500)
 @app.get("/api/campaigns-debug")
 def api_campaigns_debug() -> JSONResponse:
     try:

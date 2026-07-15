@@ -1,9 +1,29 @@
-"""Extended Cloud Run entrypoint.
+"""Extended Cloud Run entrypoint - THE real one. This is what the Dockerfile's
+CMD actually points at (`gunicorn extended_server:app`), not app.py (deleted,
+was dead) and not server.py or optimize_campaigns.py directly.
 
-This wraps server.py and overrides only the launch route so duplicate launches are
-blocked. It also adds a harvest endpoint that promotes proven AUTO DISCOVERY
-search terms into the matching MANUAL EXACT campaign, plus a small dashboard UI
-patch so these controls are visible without rewriting the whole template.
+ROUTING MODEL - READ BEFORE ADDING OR CHANGING A ROUTE:
+This file does `from server import app`, then imports optimize_campaigns.py,
+which ALSO defines routes on that same shared FastAPI `app` object via its own
+`@app.get/@app.post` decorators (module-level code runs on import). Then this
+file's own `@app...` decorators register last. For two routes with the exact
+same path+method, Starlette matches in REGISTRATION ORDER and the FIRST one
+registered wins - so plainly duplicating a path in a later-imported module
+does NOT override the earlier one; it just adds silently-dead code that never
+executes. (This bit a real feature once: an earlier version of this file
+re-declared /api/create-campaign-from-product and / hoping to override
+server.py's versions, and neither ever ran.)
+
+The one correct way to actually override a route from server.py or
+optimize_campaigns.py is the pattern below: call _remove_route(path, method)
+to unregister the earlier one, then redeclare it here. Only /  and
+/api/create-campaign-from-product currently need this (the latter to add
+duplicate-campaign-launch protection ahead of server.py's plain launcher,
+which the wrapper still calls internally as `base.api_create_recommended_
+campaigns(...)` when it decides to proceed). Everything else this file adds
+(/api/campaign-products, /api/acos-circuit-breaker, /api/campaign-state-live/
+{id}, /api/harvest-discovery-winners) is on a path unique to this file, so no
+override dance is needed for those.
 """
 import datetime
 import hmac
