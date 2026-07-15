@@ -1,3 +1,17 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+@keyframes nws-spin {
+  to { transform: rotate(360deg); }
+}
+.nws-loader {
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  border: 2px solid rgba(126, 200, 80, 0.25);
+  border-top-color: #7ec850;
+  border-radius: 50%;
+  animation: nws-spin 0.65s linear infinite;
+  vertical-align: middle;
+}

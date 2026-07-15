@@ -34,3 +34,37 @@ export async function backendHeaders(backendUrl: string): Promise<Record<string,
     ...(internalToken ? { "X-Daily-Optimizer-Token": internalToken } : {}),
   };
 }
+
+import { NextResponse } from "next/server";
+
+/** Thin passthrough for the many action endpoints that take no meaningful
+ * request body transformation (just forward whatever JSON body was sent,
+ * or {} for GET). Used by simple one-shot action routes like
+ * refresh-dashboard-cache, apply-negatives, retune-existing-bids, etc. */
+export async function proxyToBackend(
+  backendPath: string,
+  method: "GET" | "POST" | "PUT",
+  body?: unknown
+): Promise<NextResponse> {
+  try {
+    const backendUrl = getBackendUrl();
+    const response = await fetch(`${backendUrl}${backendPath}`, {
+      method,
+      headers: await backendHeaders(backendUrl),
+      ...(method !== "GET" ? { body: JSON.stringify(body ?? {}) } : {}),
+      cache: "no-store",
+    });
+
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      return NextResponse.json(
+        { error: data.message || `Backend error: ${response.statusText}` },
+        { status: response.status }
+      );
+    }
+    return NextResponse.json(data);
+  } catch (error) {
+    console.error(`Error proxying ${method} ${backendPath}:`, error);
+    return NextResponse.json({ error: "Backend request failed" }, { status: 500 });
+  }
+}
