@@ -1117,23 +1117,50 @@ def apply_estimated_bids_step(
 
 
 # ========================= PRODUCTS =========================
+# Replaced the shared Google Sheet (reused for an unrelated social-media
+# content calendar, and prone to corruption - a HeyGen job-failure row once
+# leaked literal header names into the Product_ID column) with a dedicated
+# BigQuery table during the July 2026 consolidation. PRODUCTS_CSV_URL is kept
+# only so a rollback doesn't require a code change.
 PRODUCTS_CSV_URL = os.getenv(
     "PRODUCTS_CSV_URL",
     "https://docs.google.com/spreadsheets/d/1dtUYrSy18_D2updwCpVa5wXfgf0hzAXaiQTQqMQnrSc/export?format=csv",
 )
+PRODUCTS_TABLE = os.getenv("PRODUCTS_TABLE", "amazon-ppc-bid-optimizer.amazon_ppc.products")
 
 _products_cache: Optional[list] = None
 _products_cache_ts: float = 0.0
 
 def load_products() -> list:
+    """Load the PPC product feed from BigQuery. Returns rows shaped like the
+    old Sheet export (capitalized column names) so normalized_product() and
+    generate_keywords_for_product() don't need to change."""
     global _products_cache, _products_cache_ts
     import time
     if _products_cache and (time.time() - _products_cache_ts) < 900:
         return _products_cache
-    r = requests.get(PRODUCTS_CSV_URL, timeout=30)
-    r.raise_for_status()
-    reader = csv.DictReader(io.StringIO(r.text))
-    rows = [{k.strip(): (v or "").strip() for k, v in row.items()} for row in reader]
+    from google.cloud import bigquery
+    client = bigquery.Client(project=os.getenv("GCP_PROJECT_ID", "amazon-ppc-bid-optimizer"))
+    query_job = client.query(f"""
+        SELECT product_id, sku, asin, title, selling_price, active, category,
+               keywords, research_keywords, target_acos
+        FROM `{PRODUCTS_TABLE}`
+    """)
+    rows = [
+        {
+            "Product_ID": row.product_id or "",
+            "SKU": row.sku or "",
+            "ASIN": row.asin or "",
+            "Title": row.title or "",
+            "Selling_Price": "" if row.selling_price is None else str(row.selling_price),
+            "Active": "TRUE" if row.active else "FALSE",
+            "Category": row.category or "",
+            "Keywords": row.keywords or "",
+            "Research_Keywords": row.research_keywords or "",
+            "Target_ACOS": "" if row.target_acos is None else str(row.target_acos),
+        }
+        for row in query_job.result()
+    ]
     _products_cache = rows
     _products_cache_ts = time.time()
     return rows

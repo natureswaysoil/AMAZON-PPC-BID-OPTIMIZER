@@ -20,3 +20,4 @@ python-multipart>=0.0.12
 uvloop>=0.21.0; platform_system != "Windows"
 httptools>=0.6.0
 google-cloud-storage>=2.16.0
+google-cloud-bigquery>=3.25.0
