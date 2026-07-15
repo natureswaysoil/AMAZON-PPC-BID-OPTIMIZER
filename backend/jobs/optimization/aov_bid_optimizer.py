@@ -5,6 +5,7 @@ from core.config import (
     AOV_TIERS, PERFORMANCE_MULTIPLIERS, MATCH_TYPE_MULTIPLIERS,
     get_time_multiplier, MAX_BID_AS_PERCENT_OF_AOV, settings
 )
+from core.acos_policy import get_target_acos
 from aov_fetcher import aov_fetcher
 from shared.amazon_client import amazon_client
 from datetime import datetime, timezone
@@ -203,7 +204,7 @@ class AOVBidOptimizer:
             aov_data = aov_fetcher.get_aov(campaign_id)
             keyword_data["aov"] = aov_data.aov
             keyword_data["aov_confidence"] = aov_data.confidence
-            keyword_data["target_acos"] = 0.30
+            keyword_data["target_acos"] = get_target_acos()
 
             try:
                 optimization = self.calculate_optimal_bid(keyword_data, current_hour)

@@ -63,7 +63,10 @@ def get_time_multiplier(hour: int, performance_tier: str,
 # Safety limits
 MAX_BID_AS_PERCENT_OF_AOV = 0.07  # Never bid more than 7% of AOV
 MIN_CONVERSIONS_FOR_PROMOTION = 2
-TARGET_ACOS_DEFAULT = 0.30
+# Superseded by core.acos_policy.get_target_acos() (reads the live-authoritative
+# amazon_ppc.optimizer_config BigQuery value). Not imported anywhere anymore;
+# kept only so nothing that still references this name breaks.
+TARGET_ACOS_DEFAULT = 0.25
 
 class Settings(BaseSettings):
     """Application settings using pydantic-settings"""
