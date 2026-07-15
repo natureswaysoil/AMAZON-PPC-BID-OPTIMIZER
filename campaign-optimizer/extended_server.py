@@ -598,3 +598,117 @@ def api_acos_circuit_breaker(
         "flagged_count": len(flagged),
         "flagged": flagged,
     })
+
+
+# ========================= amazon-ppc-api REPLACEMENT ENDPOINTS =========================
+# amazon-ppc-api (image us-central1-docker.pkg.dev/.../ppc/amazon-ppc-api) has no
+# recoverable source (6+ months stale, pushed via raw docker push, no GitHub repo,
+# no Cloud Build history). These reimplement its load-bearing routes so callers can
+# be migrated off it. Do not delete that service until every caller here is
+# confirmed cut over (check Cloud Run IAM bindings, not just code references).
+
+@app.get("/api/settings")
+def api_settings() -> JSONResponse:
+    """Replaces amazon-ppc-api's /api/settings, which read target_acos from the
+    same amazon_ppc.optimizer_config table this reads from directly."""
+    from acos_policy import get_target_acos, get_circuit_breaker_ceiling
+    return JSONResponse({
+        "target_acos": get_target_acos(),
+        "circuit_breaker_ceiling": get_circuit_breaker_ceiling(),
+    })
+
+
+@app.get("/api/budgets")
+def api_budgets(
+    authorization: Optional[str] = Header(default=None),
+    x_daily_optimizer_token: Optional[str] = Header(default=None),
+) -> JSONResponse:
+    """Replaces amazon-ppc-api's /api/budgets, which read daily_budget from
+    amazon_ppc.campaigns - a table confirmed abandoned (313/313 rows NULL,
+    no writer for 3+ days as of this session). Reads sp_campaign_performance
+    instead, the table ads-data-sync actually keeps current."""
+    verify_internal_token(authorization, x_daily_optimizer_token)
+    from google.cloud import bigquery
+
+    client = bigquery.Client(project=os.getenv("GCP_PROJECT_ID", "amazon-ppc-bid-optimizer"))
+    query = """
+        SELECT campaign_id, campaign_name, campaign_status AS state,
+               campaign_budget AS daily_budget, cost AS spend_today, date,
+               date = CURRENT_DATE() AS is_today
+        FROM `amazon-ppc-bid-optimizer.amazon_ppc.sp_campaign_performance`
+        QUALIFY ROW_NUMBER() OVER (PARTITION BY campaign_id ORDER BY date DESC) = 1
+    """
+    rows = [
+        {
+            "campaign_id": row.campaign_id,
+            "campaign_name": row.campaign_name,
+            "state": row.state,
+            "daily_budget": row.daily_budget,
+            "spend_today": row.spend_today if row.is_today else None,
+            "as_of_date": str(row.date),
+        }
+        for row in client.query(query).result()
+    ]
+    return JSONResponse({"campaigns": rows})
+
+
+@app.put("/api/campaigns/{campaign_id}/state")
+def api_update_campaign_state(
+    campaign_id: str,
+    payload: Dict[str, Any] = Body(...),
+    authorization: Optional[str] = Header(default=None),
+    x_daily_optimizer_token: Optional[str] = Header(default=None),
+) -> JSONResponse:
+    """Replaces amazon-ppc-api's PUT /api/campaigns/{id}/state, which its own
+    OpenAPI description admitted only updated BigQuery ("dashboard only") -
+    it never actually called Amazon, so using it to pause a campaign gave a
+    false sense of safety. This one really calls Amazon's API, using the
+    same pattern proven by /api/acos-circuit-breaker."""
+    verify_internal_token(authorization, x_daily_optimizer_token)
+
+    state = str(payload.get("state", "")).upper()
+    if state not in ("ENABLED", "PAUSED"):
+        return JSONResponse({"error": True, "message": "state must be ENABLED or PAUSED"}, status_code=400)
+
+    try:
+        client = AmazonAdsClient()
+        client.put(
+            "/sp/campaigns",
+            {"campaigns": [{"campaignId": str(campaign_id), "state": state}]},
+            content_type="application/vnd.spcampaign.v3+json",
+            accept="application/vnd.spcampaign.v3+json",
+        )
+    except Exception as exc:
+        logger.error(f"Failed to set campaign {campaign_id} state to {state}: {exc}")
+        return JSONResponse({"error": True, "message": str(exc)}, status_code=500)
+
+    return JSONResponse({"success": True, "campaign_id": campaign_id, "state": state})
+
+
+@app.get("/api/decisions")
+def api_decisions(
+    limit: int = 200,
+    authorization: Optional[str] = Header(default=None),
+    x_daily_optimizer_token: Optional[str] = Header(default=None),
+) -> JSONResponse:
+    """Replaces amazon-ppc-api's /api/decisions, which read
+    recommendation_bid_changes - confirmed stopped receiving writes from
+    anything but keyword-harvester in January 2026. bid_optimizations is
+    where aov_bid_optimizer.py (the job actually producing bid decisions,
+    now that its table-name bug is fixed) logs to."""
+    verify_internal_token(authorization, x_daily_optimizer_token)
+    from google.cloud import bigquery
+
+    client = bigquery.Client(project=os.getenv("GCP_PROJECT_ID", "amazon-ppc-bid-optimizer"))
+    query = f"""
+        SELECT campaign_id, keyword_id, keyword_text, current_bid, new_bid,
+               performance_tier, aov_tier, ceiling, reasoning, timestamp
+        FROM `amazon-ppc-bid-optimizer.amazon_ppc.bid_optimizations`
+        ORDER BY timestamp DESC
+        LIMIT {int(limit)}
+    """
+    rows = [dict(row) for row in client.query(query).result()]
+    for row in rows:
+        if row.get("timestamp") is not None:
+            row["timestamp"] = row["timestamp"].isoformat()
+    return JSONResponse({"count": len(rows), "decisions": rows})
