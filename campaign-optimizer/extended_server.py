@@ -483,15 +483,14 @@ def api_campaign_products(limit: int = 50) -> JSONResponse:
 
 
 # ========================= ACOS CIRCUIT BREAKER =========================
-# Worst-case ceiling across the four ACOS tiers (Defensive 25% / Core 25% /
-# High-LTV 32% / Launch 38%). Deliberately independent of daily_budget: the
-# BigQuery-synced daily_budget field has been observed stuck at 0.0 for
-# campaigns that are actually ENABLED with a real budget on Amazon's side,
-# so budget-based pacing can't be trusted as the sole safety net for runaway
-# ACOS. Reads live cost_7d/sales_7d/acos_7d from the dashboard's /api/campaigns
-# (verified accurate against Amazon Ads directly) rather than any BigQuery
-# daily_budget column.
-ACOS_CIRCUIT_BREAKER_CEILING = 0.38
+# Ceiling now comes from acos_policy.get_circuit_breaker_ceiling() (the
+# canonical policy module) instead of a local constant. Deliberately
+# independent of daily_budget: the BigQuery-synced daily_budget field has
+# been observed stuck at 0.0 for campaigns that are actually ENABLED with a
+# real budget on Amazon's side, so budget-based pacing can't be trusted as
+# the sole safety net for runaway ACOS. Reads live cost_7d/sales_7d/acos_7d
+# from the dashboard's /api/campaigns (verified accurate against Amazon Ads
+# directly) rather than any BigQuery daily_budget column.
 ACOS_CIRCUIT_BREAKER_MIN_SPEND = 20.0  # ignore low-spend noise (e.g. 1 click, no sales yet)
 DASHBOARD_CAMPAIGNS_URL = os.getenv(
     "DASHBOARD_CAMPAIGNS_URL",
@@ -505,12 +504,14 @@ def api_acos_circuit_breaker(
     authorization: Optional[str] = Header(default=None),
     x_daily_optimizer_token: Optional[str] = Header(default=None),
 ) -> JSONResponse:
-    """Pause any ENABLED campaign whose trailing ACOS exceeds the worst-case
-    tier ceiling, regardless of daily_budget/pacing state."""
+    """Pause any ENABLED campaign whose trailing ACOS exceeds the canonical
+    circuit-breaker ceiling, regardless of daily_budget/pacing state."""
     verify_internal_token(authorization, x_daily_optimizer_token)
 
+    from acos_policy import get_circuit_breaker_ceiling
+
     apply_live = bool(payload.get("apply_live", False))
-    ceiling = float(payload.get("acos_ceiling", ACOS_CIRCUIT_BREAKER_CEILING))
+    ceiling = float(payload.get("acos_ceiling", get_circuit_breaker_ceiling()))
     min_spend = float(payload.get("min_spend", ACOS_CIRCUIT_BREAKER_MIN_SPEND))
 
     try:

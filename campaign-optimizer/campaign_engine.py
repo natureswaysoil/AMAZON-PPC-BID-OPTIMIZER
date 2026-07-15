@@ -139,7 +139,12 @@ def build_campaign_plan(row: Dict[str, Any], rules: Dict[str, Any] | None = None
     name = product_name(row)
     slug = slugify(name)
     price = money(first(row, "Price", "Selling_Price", "Selling Price"), 0.0)
-    target_acos = money(first(row, "Target_ACOS", "Target ACOS"), rules["optimization_rules"].get("target_acos_fallback", 0.35))
+    try:
+        from acos_policy import get_target_acos
+        acos_fallback = get_target_acos()
+    except Exception:
+        acos_fallback = rules["optimization_rules"].get("target_acos_fallback", 0.35)
+    target_acos = money(first(row, "Target_ACOS", "Target ACOS"), acos_fallback)
     asin = first(row, "ASIN")
     sku = first(row, "SKU")
 

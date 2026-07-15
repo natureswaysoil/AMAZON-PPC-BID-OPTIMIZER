@@ -44,6 +44,9 @@ OFF_END    = int(os.getenv("OFF_PEAK_END",     "8"))    # 8am  EST — overnight
 
 WINNER_MIN_CLICKS = int(os.getenv("WINNER_MIN_CLICKS", "8"))
 WINNER_MIN_ORDERS = int(os.getenv("WINNER_MIN_ORDERS", "2"))
+# Winner-promotion ACOS bar now comes from the canonical policy module
+# (acos_policy.get_target_acos()) instead of this env-var default. Kept as
+# a fallback constant in case that import ever fails.
 WINNER_MAX_ACOS = float(os.getenv("WINNER_MAX_ACOS", "0.35"))
 
 NEGATIVE_MIN_CLICKS = int(os.getenv("NEGATIVE_MIN_CLICKS", "20"))
@@ -366,11 +369,17 @@ def classify_terms(rows: List[Dict[str, Any]]) -> Dict[str, List[Dict[str, Any]]
             "acos": round(acos, 4) if acos is not None else None,
         }
 
+        try:
+            from acos_policy import get_target_acos
+            winner_max_acos = get_target_acos()
+        except Exception:
+            winner_max_acos = WINNER_MAX_ACOS
+
         if (
             orders >= WINNER_MIN_ORDERS
             and clicks >= WINNER_MIN_CLICKS
             and sales > 0
-            and (acos is None or acos <= WINNER_MAX_ACOS)
+            and (acos is None or acos <= winner_max_acos)
         ):
             winners.append({**result, "reason": "winner"})
         elif clicks >= NEGATIVE_MIN_CLICKS and orders == 0:
@@ -1318,7 +1327,10 @@ def api_campaigns_debug() -> JSONResponse:
 
 @app.get("/api/campaign-plan")
 def api_campaign_plan():
-    return build_all_campaign_plans()   
+    # Explicitly pass rows from load_products() (BigQuery-backed) - calling
+    # build_all_campaign_plans() with no args falls back to
+    # load_products_from_sheet(), bypassing the Stage 2 product-feed migration.
+    return build_all_campaign_plans(load_products())
 
 @app.post("/api/create-campaign-from-product")
 def api_create_campaign(
