@@ -162,15 +162,15 @@ class AOVBidOptimizer:
             k.match_type,
             k.campaign_id,
             SUM(kp.clicks) as clicks_30d,
-            SUM(kp.conversions) as conversions_30d,
+            SUM(kp.purchases) as conversions_30d,
             SUM(kp.cost) as cost_30d,
-            SUM(kp.conversion_value) as sales_30d,
-            SAFE_DIVIDE(CAST(SUM(kp.conversions) AS FLOAT64), CAST(SUM(kp.clicks) AS FLOAT64)) as cvr,
-            SAFE_DIVIDE(SUM(kp.cost), NULLIF(SUM(kp.conversion_value), 0)) as acos
+            SUM(kp.sales) as sales_30d,
+            SAFE_DIVIDE(CAST(SUM(kp.purchases) AS FLOAT64), CAST(SUM(kp.clicks) AS FLOAT64)) as cvr,
+            SAFE_DIVIDE(SUM(kp.cost), NULLIF(SUM(kp.sales), 0)) as acos
           FROM `{project}.{dataset}.keywords` k
-          LEFT JOIN `{project}.{dataset}.keyword_performance` kp
+          LEFT JOIN `{project}.{dataset}.sp_keyword_performance` kp
             ON k.keyword_id = kp.keyword_id
-            AND kp.date >= DATE_SUB(CURRENT_DATE(), INTERVAL 30 DAY)
+            AND kp.sync_date >= DATE_SUB(CURRENT_DATE(), INTERVAL 30 DAY)
           WHERE k.state = 'ENABLED'
           GROUP BY k.keyword_id, k.keyword_text, k.bid, k.match_type, k.campaign_id
         )
