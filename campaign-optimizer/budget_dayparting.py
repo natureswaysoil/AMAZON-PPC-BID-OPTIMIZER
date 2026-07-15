@@ -28,9 +28,16 @@ from typing import Any, Dict, Optional, Tuple
 
 PRIME_TIME_START = int(os.getenv("PRIME_TIME_START", "12"))
 PRIME_TIME_END = int(os.getenv("PRIME_TIME_END", "20"))
+# TAPER_BID_MULTIPLIER=0.60 already means "-40% off Amazon's suggested low" -
+# matches the explicit business rule (confirmed 2026-07-15): off-peak bids
+# get cut 40%. Left as-is, was already correct.
 PROTECT_BID_MULTIPLIER = float(os.getenv("PROTECT_BID_MULTIPLIER", "0.45"))
 TAPER_BID_MULTIPLIER = float(os.getenv("TAPER_BID_MULTIPLIER", "0.60"))
-PRIME_BID_POSITION = float(os.getenv("PRIME_BID_POSITION", "0.85"))
+# PRIME_BID_POSITION=1.0: prime-hour bids go to the literal high end of
+# Amazon's suggested range (explicit business rule, confirmed 2026-07-15).
+# Was 0.85 (85% of the way to high) - a deliberate safety margin that no
+# longer applies now that the rule has been stated explicitly.
+PRIME_BID_POSITION = float(os.getenv("PRIME_BID_POSITION", "1.0"))
 NORMAL_BID_POSITION = float(os.getenv("NORMAL_BID_POSITION", "0.55"))
 MIN_BID = float(os.getenv("MIN_DAYPART_BID", "0.10"))
 MAX_BID = float(os.getenv("MAX_DAYPART_BID", "2.50"))

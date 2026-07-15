@@ -232,9 +232,28 @@ def unique_in_order(items: List[str]) -> List[str]:
     return out
 
 
-# Peak/off-peak multipliers — used when Amazon suggested bids unavailable
-PEAK_MULTIPLIER     = float(os.getenv("PEAK_BID_MULTIPLIER",     "1.30"))  # +30% during prime
-OFF_PEAK_MULTIPLIER = float(os.getenv("OFF_PEAK_BID_MULTIPLIER", "0.70"))  # -30% overnight
+# NOTE: server.py monkey-patches this module's choose_bid name at import time
+# (`optimizer_core.choose_bid = choose_budget_protected_bid`, where
+# optimizer_core IS this module - the assignment mutates this module's own
+# globals). Every call site below that invokes the bare name `choose_bid(...)`
+# (retune_existing_bids_step, apply_estimated_bids_step, the harvest-winner
+# classifier, and /api/bid-recommendation) resolves to
+# budget_dayparting.choose_budget_protected_bid at request time, NOT this
+# function. The real peak/off-peak logic - and the place to change it - is
+# budget_dayparting.py's PRIME/PROTECT/TAPER multipliers. This function and
+# its constants are dead code as far as any live route is concerned; left in
+# place (not deleted) only because untangling every call site is a larger,
+# separate change from the one this comment is here to prevent (someone
+# editing this function expecting it to do something).
+#
+# Peak/off-peak pacing policy (explicit business rule, confirmed 2026-07-15):
+# prime hours -> raise to the high end of Amazon's suggested bid range;
+# off-peak hours -> cut 40% off the current bid, regardless of what Amazon
+# suggests. OFF_PEAK_CUT is a fraction taken OFF the current bid (0.40 = -40%),
+# not a multiplier - kept distinct from PEAK_MULTIPLIER (still a multiplier)
+# so the two can't be confused for the same kind of number.
+PEAK_MULTIPLIER = float(os.getenv("PEAK_BID_MULTIPLIER", "1.30"))  # fallback only, when Amazon gives no recommendation
+OFF_PEAK_CUT = float(os.getenv("OFF_PEAK_BID_CUT", "0.40"))  # -40% off current bid, always
 
 def choose_bid(rec: Dict[str, float], fallback: float) -> Tuple[float, float, float]:
     mode = get_bid_mode()
@@ -242,12 +261,17 @@ def choose_bid(rec: Dict[str, float], fallback: float) -> Tuple[float, float, fl
     high     = float(rec.get("high")      or 0.0)
     suggested = float(rec.get("suggested") or 0.0)
 
+    if mode == "OFF_PEAK":
+        # Always a flat 40% cut off the current bid - not Amazon's suggested
+        # low, which could be higher or lower than a straight cut and doesn't
+        # match the "-40%" rule as specified.
+        applied = round(fallback * (1 - OFF_PEAK_CUT), 2)
+        return round(low, 2), round(high, 2), applied
+
     # Use Amazon suggested bids if available
     if low > 0 and high > 0:
         if mode == "PEAK":
             applied = high
-        elif mode == "OFF_PEAK":
-            applied = low
         else:
             applied = round((low + high) / 2.0, 2)
         return round(low, 2), round(high, 2), round(applied, 2)
@@ -255,8 +279,6 @@ def choose_bid(rec: Dict[str, float], fallback: float) -> Tuple[float, float, fl
     # Fallback: apply multiplier to current bid based on time of day
     if mode == "PEAK":
         applied = round(fallback * PEAK_MULTIPLIER, 2)
-    elif mode == "OFF_PEAK":
-        applied = round(fallback * OFF_PEAK_MULTIPLIER, 2)
     else:
         applied = round(fallback, 2)
 
