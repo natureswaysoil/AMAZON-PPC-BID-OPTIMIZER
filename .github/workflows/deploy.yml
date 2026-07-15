@@ -74,21 +74,54 @@ jobs:
       - name: Configure Docker
         run: gcloud auth configure-docker gcr.io --quiet
 
+      # Retries transient registry failures (e.g. Docker Hub 502s pulling the
+      # base image) instead of failing the whole deploy outright. Confirmed
+      # 2026-07-15: a bare `docker build` failed the entire workflow on a
+      # 502 Bad Gateway from registry-1.docker.io with no retry, which - had
+      # it happened on a fix commit instead of a lucky no-op push - would
+      # have left the running Cloud Run Jobs silently on stale code with no
+      # failure signal short of manually checking Actions.
       - name: Build Backend
         run: |
-          docker build -t gcr.io/$PROJECT_ID/amazon-ppc-backend:$GITHUB_SHA \
+          retry() {
+            local n=1 max=3 delay=15
+            until "$@"; do
+              if [ "$n" -ge "$max" ]; then
+                echo "::error::Command failed after $n attempts: $*"
+                return 1
+              fi
+              echo "Attempt $n/$max failed, retrying in ${delay}s..."
+              sleep "$delay"
+              n=$((n + 1))
+              delay=$((delay * 2))
+            done
+          }
+          retry docker build -t gcr.io/$PROJECT_ID/amazon-ppc-backend:$GITHUB_SHA \
             -t gcr.io/$PROJECT_ID/amazon-ppc-backend:latest \
             -f backend/Dockerfile ./backend
-          docker push gcr.io/$PROJECT_ID/amazon-ppc-backend:$GITHUB_SHA
-          docker push gcr.io/$PROJECT_ID/amazon-ppc-backend:latest
+          retry docker push gcr.io/$PROJECT_ID/amazon-ppc-backend:$GITHUB_SHA
+          retry docker push gcr.io/$PROJECT_ID/amazon-ppc-backend:latest
 
       - name: Build Frontend
         run: |
-          docker build -t gcr.io/$PROJECT_ID/amazon-ppc-frontend:$GITHUB_SHA \
+          retry() {
+            local n=1 max=3 delay=15
+            until "$@"; do
+              if [ "$n" -ge "$max" ]; then
+                echo "::error::Command failed after $n attempts: $*"
+                return 1
+              fi
+              echo "Attempt $n/$max failed, retrying in ${delay}s..."
+              sleep "$delay"
+              n=$((n + 1))
+              delay=$((delay * 2))
+            done
+          }
+          retry docker build -t gcr.io/$PROJECT_ID/amazon-ppc-frontend:$GITHUB_SHA \
             -t gcr.io/$PROJECT_ID/amazon-ppc-frontend:latest \
             -f frontend/Dockerfile ./frontend
-          docker push gcr.io/$PROJECT_ID/amazon-ppc-frontend:$GITHUB_SHA
-          docker push gcr.io/$PROJECT_ID/amazon-ppc-frontend:latest
+          retry docker push gcr.io/$PROJECT_ID/amazon-ppc-frontend:$GITHUB_SHA
+          retry docker push gcr.io/$PROJECT_ID/amazon-ppc-frontend:latest
 
       - name: Deploy Backend Jobs
         run: |
