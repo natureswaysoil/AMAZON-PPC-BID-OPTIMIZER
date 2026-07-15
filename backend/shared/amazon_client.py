@@ -31,21 +31,30 @@ class AmazonAdsClient:
         self._request_count = 0
         logger.info(f"✅ AmazonAdsClient initialized (region={self.region}, endpoint={self.base_url})")
     
-    def _get_headers(self) -> Dict[str, str]:
-        """Build request headers with current access token"""
+    def _get_headers(self, content_type: str = "application/json", accept: str = "application/json") -> Dict[str, str]:
+        """Build request headers with current access token.
+
+        Sponsored Products v3 endpoints (e.g. PUT /sp/keywords, /sp/campaigns)
+        reject requests with the generic application/json content type - they
+        require the vendor-specific media type (application/vnd.spkeyword.v3+json
+        etc). Callers hitting a v3 endpoint must pass the matching content_type/
+        accept; the generic default is kept for older, non-v3 endpoints.
+        """
         return {
             "Amazon-Advertising-API-ClientId": token_manager.get_client_id(),
             "Authorization": f"Bearer {token_manager.get_access_token()}",
             "Amazon-Advertising-API-Scope": token_manager.get_profile_id(),
-            "Content-Type": "application/json",
-            "Accept": "application/json"
+            "Content-Type": content_type,
+            "Accept": accept
         }
-    
+
     def _make_request(
-        self, 
-        method: str, 
-        endpoint: str, 
+        self,
+        method: str,
+        endpoint: str,
         max_retries: int = 3,
+        content_type: str = "application/json",
+        accept: str = "application/json",
         **kwargs
     ) -> Any:
         """
@@ -68,8 +77,8 @@ class AmazonAdsClient:
         
         for attempt in range(max_retries):
             try:
-                headers = self._get_headers()
-                
+                headers = self._get_headers(content_type=content_type, accept=accept)
+
                 logger.debug(f"{method} {endpoint} (attempt {attempt + 1}/{max_retries})")
                 
                 response = requests.request(
@@ -245,20 +254,27 @@ class AmazonAdsClient:
             updates = [{'keyword_id': 123, 'new_bid': 1.50}]
             client.update_keyword_bids_batch(updates)
         """
-        # Support both Amazon API format and Python-style keys
+        # Support both Amazon API format and Python-style keys.
+        # Sponsored Products v3 PUT /sp/keywords requires the payload wrapped
+        # as {"keywords": [...]}, each row limited to keywordId + bid + state
+        # (keywordText/matchType trigger a 400), and the vendor-specific
+        # content type - confirmed by reproducing a live 400 Bad Request with
+        # the previous bare-list/generic-content-type version of this method.
         data = []
         for i, u in enumerate(updates):
             if 'keywordId' in u and 'bid' in u:
                 # Already in Amazon API format
                 data.append({
-                    "keywordId": u['keywordId'],
-                    "bid": round(u['bid'], 2)
+                    "keywordId": str(u['keywordId']),
+                    "bid": round(u['bid'], 2),
+                    "state": u.get("state", "ENABLED"),
                 })
             elif 'keyword_id' in u and 'new_bid' in u:
                 # Convert from Python-style keys (optimizer format)
                 data.append({
-                    "keywordId": u['keyword_id'],
-                    "bid": round(u['new_bid'], 2)
+                    "keywordId": str(u['keyword_id']),
+                    "bid": round(u['new_bid'], 2),
+                    "state": u.get("state", "ENABLED"),
                 })
             else:
                 # Missing required keys
@@ -267,9 +283,14 @@ class AmazonAdsClient:
                     f"Expected either ('keywordId', 'bid') or ('keyword_id', 'new_bid'), "
                     f"but got: {list(u.keys())}"
                 )
-        
+
         logger.info(f"Batch updating {len(updates)} keyword bids")
-        response = self._make_request('PUT', '/sp/keywords', json=data)
+        response = self._make_request(
+            'PUT', '/sp/keywords',
+            json={"keywords": data},
+            content_type="application/vnd.spkeyword.v3+json",
+            accept="application/vnd.spkeyword.v3+json",
+        )
         logger.info(f"✅ Batch update complete")
         return response
     
