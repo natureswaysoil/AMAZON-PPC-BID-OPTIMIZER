@@ -601,6 +601,261 @@ def api_acos_circuit_breaker(
     })
 
 
+# ========================= ACOS CIRCUIT BREAKER V2 (2026-07-16) =========================
+# Runs alongside (does not replace) /api/acos-circuit-breaker above. That one
+# still enforces the flat 38% pause-on-sight safety net; per the consolidation
+# plan's safety invariant, it stays live until this replacement has been
+# verified. v2 adds what the flat version can't do:
+#   - per-campaign tiered ceilings (products.target_acos, conservative default)
+#   - 3-day AND 7-day trailing windows (catches a fast blowup before it
+#     accumulates 7 days of damage)
+#   - floors bids instead of pausing outright (campaign stays live, traffic
+#     just collapses toward zero - a smaller swing than a full stop)
+#   - persists trip state so a tripped campaign is never silently re-evaluated
+#     and un-flagged without a human clearing it
+#   - Slack alerting
+#   - a separate daily-budget pacing check independent of ACOS
+CIRCUIT_BREAKER_V2_MIN_SPEND = 20.0  # same noise floor as v1
+
+
+def _tripped_uncleared_campaign_ids(client) -> set:
+    rows = client.query(
+        f"""
+        SELECT DISTINCT campaign_id
+        FROM `amazon-ppc-bid-optimizer.amazon_ppc.circuit_breaker_state`
+        WHERE cleared IS NOT TRUE
+        """
+    ).result()
+    return {str(r.campaign_id) for r in rows}
+
+
+def _campaign_performance_windows(client) -> Dict[str, Dict[str, Any]]:
+    query = """
+        SELECT
+          campaign_id,
+          MAX(campaign_name) AS campaign_name,
+          MAX(campaign_status) AS state,
+          SUM(IF(date >= DATE_SUB(CURRENT_DATE(), INTERVAL 3 DAY), cost, 0)) AS cost_3d,
+          SUM(IF(date >= DATE_SUB(CURRENT_DATE(), INTERVAL 3 DAY), sales, 0)) AS sales_3d,
+          SUM(IF(date >= DATE_SUB(CURRENT_DATE(), INTERVAL 7 DAY), cost, 0)) AS cost_7d,
+          SUM(IF(date >= DATE_SUB(CURRENT_DATE(), INTERVAL 7 DAY), sales, 0)) AS sales_7d
+        FROM `amazon-ppc-bid-optimizer.amazon_ppc.sp_campaign_performance`
+        GROUP BY campaign_id
+        HAVING UPPER(state) = 'ENABLED'
+    """
+    out = {}
+    for r in client.query(query).result():
+        out[str(r.campaign_id)] = {
+            "campaign_name": r.campaign_name,
+            "cost_3d": float(r.cost_3d or 0),
+            "sales_3d": float(r.sales_3d or 0),
+            "cost_7d": float(r.cost_7d or 0),
+            "sales_7d": float(r.sales_7d or 0),
+        }
+    return out
+
+
+def _record_trip(bq_client, campaign_id: str, campaign_name: str, reason: str, acos_3d, acos_7d, ceiling: float, cost_7d: float, sales_7d: float) -> None:
+    from google.cloud import bigquery
+
+    query = """
+        INSERT INTO `amazon-ppc-bid-optimizer.amazon_ppc.circuit_breaker_state`
+        (campaign_id, campaign_name, tripped_at, reason, acos_3d, acos_7d, ceiling, cost_7d, sales_7d, cleared, cleared_at)
+        VALUES (@campaign_id, @campaign_name, CURRENT_TIMESTAMP(), @reason, @acos_3d, @acos_7d, @ceiling, @cost_7d, @sales_7d, FALSE, NULL)
+    """
+    params = [
+        bigquery.ScalarQueryParameter("campaign_id", "STRING", str(campaign_id)),
+        bigquery.ScalarQueryParameter("campaign_name", "STRING", campaign_name or ""),
+        bigquery.ScalarQueryParameter("reason", "STRING", reason),
+        bigquery.ScalarQueryParameter("acos_3d", "FLOAT64", acos_3d),
+        bigquery.ScalarQueryParameter("acos_7d", "FLOAT64", acos_7d),
+        bigquery.ScalarQueryParameter("ceiling", "FLOAT64", ceiling),
+        bigquery.ScalarQueryParameter("cost_7d", "FLOAT64", cost_7d),
+        bigquery.ScalarQueryParameter("sales_7d", "FLOAT64", sales_7d),
+    ]
+    bq_client.query(query, job_config=bigquery.QueryJobConfig(query_parameters=params)).result()
+
+
+def pct_or_inf(v: Optional[float]) -> str:
+    return f"{v:.1%}" if v is not None else "inf (zero sales)"
+
+
+def _floor_all_bids(client: AmazonAdsClient, campaign_id: str) -> int:
+    from acos_policy import CIRCUIT_BREAKER_FLOOR_BID
+
+    keywords = client.list_keywords(campaign_id)
+    rows = [
+        {"keywordId": kw["keywordId"], "bid": CIRCUIT_BREAKER_FLOOR_BID, "state": "ENABLED"}
+        for kw in keywords
+        if kw.get("keywordId")
+    ]
+    if rows:
+        client.update_keywords(rows)
+    return len(rows)
+
+
+@app.post("/api/acos-circuit-breaker-v2")
+def api_acos_circuit_breaker_v2(
+    payload: Dict[str, Any] = Body(default={}),
+    authorization: Optional[str] = Header(default=None),
+    x_daily_optimizer_token: Optional[str] = Header(default=None),
+) -> JSONResponse:
+    """Tiered, dual-window ACOS circuit breaker. See module comment above
+    for how this differs from /api/acos-circuit-breaker."""
+    verify_internal_token(authorization, x_daily_optimizer_token)
+
+    from google.cloud import bigquery
+    from acos_policy import get_all_campaign_acos_ceilings
+    from alerting import send_slack_alert
+
+    apply_live = bool(payload.get("apply_live", False))
+    min_spend = float(payload.get("min_spend", CIRCUIT_BREAKER_V2_MIN_SPEND))
+
+    bq_client = bigquery.Client(project=os.getenv("GCP_PROJECT_ID", "amazon-ppc-bid-optimizer"))
+
+    try:
+        windows = _campaign_performance_windows(bq_client)
+        already_tripped = _tripped_uncleared_campaign_ids(bq_client)
+        ceilings = get_all_campaign_acos_ceilings()
+    except Exception as exc:
+        logger.exception("ACOS circuit breaker v2: failed to fetch campaign performance")
+        return JSONResponse({"error": True, "message": f"Failed to fetch campaign performance: {exc}"}, status_code=502)
+
+    ads_client = AmazonAdsClient() if apply_live else None
+    live_campaigns_by_id: Dict[str, Any] = {}
+    if apply_live:
+        try:
+            live_campaigns_by_id = {str(c.get("campaignId")): c for c in ads_client.list_campaigns()}
+        except Exception as exc:
+            logger.warning(f"ACOS circuit breaker v2: failed to fetch live campaign list for budget check: {exc}")
+
+    newly_tripped: List[Dict[str, Any]] = []
+    budget_alerts: List[Dict[str, Any]] = []
+    skipped_already_tripped = 0
+
+    for campaign_id, perf in windows.items():
+        cost_7d = perf["cost_7d"]
+        sales_7d = perf["sales_7d"]
+        campaign_name = perf["campaign_name"] or ""
+
+        if campaign_id in already_tripped:
+            skipped_already_tripped += 1
+            continue
+
+        if cost_7d < min_spend:
+            continue
+
+        ceiling = ceilings.get(campaign_id, 0.25)
+        acos_3d = round(perf["cost_3d"] / perf["sales_3d"], 4) if perf["sales_3d"] > 0 else None
+        acos_7d = round(cost_7d / sales_7d, 4) if sales_7d > 0 else None
+
+        # Zero sales with real spend is the worst case (infinite ACOS) and
+        # must trip regardless of the None guard above.
+        acos_3d_breach = (acos_3d is not None and acos_3d > ceiling) or (perf["sales_3d"] == 0 and perf["cost_3d"] >= min_spend)
+        acos_7d_breach = (acos_7d is not None and acos_7d > ceiling) or (sales_7d == 0 and cost_7d >= min_spend)
+
+        if acos_3d_breach or acos_7d_breach:
+            reason = (
+                f"3d ACOS {('%.1f%%' % (acos_3d * 100)) if acos_3d is not None else 'inf (zero sales)'} "
+                f"or 7d ACOS {('%.1f%%' % (acos_7d * 100)) if acos_7d is not None else 'inf (zero sales)'} "
+                f"exceeded ceiling {ceiling:.1%}"
+            )
+            bids_floored = 0
+            if apply_live:
+                try:
+                    bids_floored = _floor_all_bids(ads_client, campaign_id)
+                except Exception as exc:
+                    logger.error(f"ACOS circuit breaker v2: failed to floor bids for {campaign_id}: {exc}")
+
+            try:
+                _record_trip(bq_client, campaign_id, campaign_name, reason, acos_3d, acos_7d, ceiling, cost_7d, sales_7d)
+            except Exception as exc:
+                logger.error(f"ACOS circuit breaker v2: failed to record trip for {campaign_id}: {exc}")
+
+            alert_msg = (
+                f"🔴 ACOS CIRCUIT BREAKER TRIPPED\n"
+                f"Campaign: {campaign_name} ({campaign_id})\n"
+                f"3d ACOS: {pct_or_inf(acos_3d)}  ·  7d ACOS: {pct_or_inf(acos_7d)}  ·  Ceiling: {ceiling:.1%}\n"
+                f"7d cost: ${cost_7d:.2f}  ·  7d sales: ${sales_7d:.2f}\n"
+                f"Action: {'bids floored to $%.2f (' % 0.02 + str(bids_floored) + ' keywords)' if apply_live else 'DRY RUN - no bids changed'}\n"
+                f"Will NOT auto-resume. Clear manually via /api/acos-circuit-breaker/clear/{campaign_id}."
+            )
+            send_slack_alert(alert_msg)
+
+            newly_tripped.append({
+                "campaign_id": campaign_id,
+                "campaign_name": campaign_name,
+                "acos_3d": acos_3d,
+                "acos_7d": acos_7d,
+                "ceiling": ceiling,
+                "cost_7d": cost_7d,
+                "sales_7d": sales_7d,
+                "bids_floored": bids_floored,
+                "apply_live": apply_live,
+            })
+            continue
+
+        # Budget pacing check - independent of ACOS, only for campaigns that
+        # didn't already trip the ACOS breaker above.
+        live_campaign = live_campaigns_by_id.get(campaign_id)
+        if live_campaign:
+            live_budget = float((live_campaign.get("budget") or {}).get("budget") or 0)
+            avg_daily_cost = cost_7d / 7.0
+            if live_budget > 0 and avg_daily_cost > live_budget * 2:
+                budget_alerts.append({
+                    "campaign_id": campaign_id,
+                    "campaign_name": campaign_name,
+                    "avg_daily_cost_7d": round(avg_daily_cost, 2),
+                    "daily_budget": live_budget,
+                })
+                send_slack_alert(
+                    f"🟡 BUDGET PACING ALARM\n"
+                    f"Campaign: {campaign_name} ({campaign_id})\n"
+                    f"Averaging ${avg_daily_cost:.2f}/day over the last 7 days against a ${live_budget:.2f} daily budget "
+                    f"({avg_daily_cost / live_budget:.1f}x). No bid action taken - budget/pacing issue, not an ACOS issue."
+                )
+
+    return JSONResponse({
+        "apply_live": apply_live,
+        "min_spend": min_spend,
+        "campaigns_checked": len(windows),
+        "skipped_already_tripped": skipped_already_tripped,
+        "newly_tripped_count": len(newly_tripped),
+        "newly_tripped": newly_tripped,
+        "budget_alerts_count": len(budget_alerts),
+        "budget_alerts": budget_alerts,
+    })
+
+
+@app.post("/api/acos-circuit-breaker/clear/{campaign_id}")
+def api_clear_circuit_breaker(
+    campaign_id: str,
+    authorization: Optional[str] = Header(default=None),
+    x_daily_optimizer_token: Optional[str] = Header(default=None),
+) -> JSONResponse:
+    """Human-only unflag. Does NOT restore bids or resume the campaign -
+    that's a separate, deliberate decision for whoever clears this to make
+    afterward with full context on why it tripped."""
+    verify_internal_token(authorization, x_daily_optimizer_token)
+
+    from google.cloud import bigquery
+
+    client = bigquery.Client(project=os.getenv("GCP_PROJECT_ID", "amazon-ppc-bid-optimizer"))
+    query = """
+        UPDATE `amazon-ppc-bid-optimizer.amazon_ppc.circuit_breaker_state`
+        SET cleared = TRUE, cleared_at = CURRENT_TIMESTAMP()
+        WHERE campaign_id = @campaign_id AND cleared IS NOT TRUE
+    """
+    params = [bigquery.ScalarQueryParameter("campaign_id", "STRING", str(campaign_id))]
+    job = client.query(query, job_config=bigquery.QueryJobConfig(query_parameters=params))
+    job.result()
+
+    if job.num_dml_affected_rows == 0:
+        return JSONResponse({"error": True, "message": f"No uncleared trip found for campaign {campaign_id}"}, status_code=404)
+
+    return JSONResponse({"success": True, "campaign_id": campaign_id, "cleared": True})
+
+
 # ========================= amazon-ppc-api REPLACEMENT ENDPOINTS =========================
 # amazon-ppc-api (image us-central1-docker.pkg.dev/.../ppc/amazon-ppc-api) has no
 # recoverable source (6+ months stale, pushed via raw docker push, no GitHub repo,

@@ -22,12 +22,23 @@ CIRCUIT_BREAKER_CEILING is the value already proven safe in production
 import logging
 import os
 import time
-from typing import Optional
+from typing import Dict, Optional
 
 logger = logging.getLogger(__name__)
 
 DEFAULT_TARGET_ACOS = 0.25
 CIRCUIT_BREAKER_CEILING = 0.38
+
+# Per-campaign circuit-breaker tiers (2026-07-16 incident response). A single
+# flat ceiling can't tell a low-margin product (can't survive 38% ACOS) from
+# a high-LTV one (can) apart, so the breaker needs a ceiling per campaign,
+# not one number for the whole account. Sourced from the existing
+# products.target_acos column (Stage 2's per-product override, already the
+# canonical per-product ACOS knob - not a new, seventh config source).
+# CONSERVATIVE_CEILING is the mandatory default when a campaign has no
+# product with target_acos set: never fall back to "no limit."
+CONSERVATIVE_CEILING = 0.25
+CIRCUIT_BREAKER_FLOOR_BID = 0.02  # Amazon's practical SP keyword bid minimum
 
 _OPTIMIZER_CONFIG_TABLE = "amazon-ppc-bid-optimizer.amazon_ppc.optimizer_config"
 _CACHE_TTL_SECONDS = 900
@@ -70,3 +81,41 @@ def get_circuit_breaker_ceiling() -> float:
     from BigQuery on purpose - this is a safety rail, not a tuning knob that
     should silently drift if someone edits a config row."""
     return CIRCUIT_BREAKER_CEILING
+
+
+def get_all_campaign_acos_ceilings() -> Dict[str, float]:
+    """Per-campaign circuit-breaker ceiling for every campaign that has
+    advertised at least one product with a products.target_acos override.
+    Campaigns not present in the returned dict have no product-level
+    override and must use CONSERVATIVE_CEILING as their ceiling - never
+    treat a missing entry as "no limit."
+
+    A campaign can advertise more than one ASIN (e.g. AUTO_DISCOVERY); when
+    it does, the MIN() of its products' target_acos is used so the breaker
+    never applies a more permissive ceiling than the tightest-margin product
+    in that campaign warrants.
+    """
+    try:
+        from google.cloud import bigquery
+
+        client = bigquery.Client(project=os.getenv("GCP_PROJECT_ID", "amazon-ppc-bid-optimizer"))
+        query = """
+            SELECT m.campaign_id, MIN(p.target_acos) AS ceiling
+            FROM `amazon-ppc-bid-optimizer.amazon_ppc.sp_advertised_product_metrics` m
+            JOIN `amazon-ppc-bid-optimizer.amazon_ppc.products` p
+              ON (m.asin != '' AND m.asin = p.asin) OR (m.sku != '' AND m.sku = p.sku)
+            WHERE p.target_acos IS NOT NULL
+            GROUP BY m.campaign_id
+        """
+        return {str(row.campaign_id): float(row.ceiling) for row in client.query(query).result()}
+    except Exception as exc:
+        logger.warning(f"Failed to load per-campaign ACOS ceilings, all campaigns will use the conservative default: {exc}")
+        return {}
+
+
+def get_campaign_acos_ceiling(campaign_id: str, ceilings: Optional[Dict[str, float]] = None) -> float:
+    """Ceiling for a single campaign. Pass a pre-fetched `ceilings` dict
+    (from get_all_campaign_acos_ceilings) when checking many campaigns in a
+    loop to avoid a BigQuery round-trip per campaign."""
+    table = ceilings if ceilings is not None else get_all_campaign_acos_ceilings()
+    return table.get(str(campaign_id), CONSERVATIVE_CEILING)
