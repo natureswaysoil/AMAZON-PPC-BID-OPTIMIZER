@@ -425,6 +425,9 @@ export default function ControlPanel() {
           <Link href="/products" className={`${btnGhost} ${btnSm}`}>
             Manage Catalog
           </Link>
+          <Link href="/automation" className={`${btnGhost} ${btnSm}`}>
+            Automation
+          </Link>
           <button className={`${btnGhost} ${btnSm}`} onClick={refreshCache} disabled={busy === "cache"}>
             {busy === "cache" ? <span className="nws-loader" /> : null} Refresh Cache
           </button>

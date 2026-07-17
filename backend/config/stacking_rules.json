@@ -1,0 +1,25 @@
+{
+  "default": [
+    {
+      "type": "spend_cap_pause",
+      "enabled": false,
+      "params": { "max_cost_30d": 50.0 }
+    },
+    {
+      "type": "off_peak_bid_reduction",
+      "enabled": false,
+      "params": { "reduction_pct": 0.10, "peak_hours": [[16, 18], [18, 20], [20, 22]] }
+    },
+    {
+      "type": "weekend_bid_adjustment",
+      "enabled": false,
+      "params": { "adjustment_pct": -0.15 }
+    },
+    {
+      "type": "inventory_days_pause",
+      "enabled": false,
+      "params": { "min_days": 15 }
+    }
+  ],
+  "per_campaign": {}
+}

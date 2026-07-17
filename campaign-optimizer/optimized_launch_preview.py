@@ -80,6 +80,91 @@ def clamp_bid(value: float, min_bid: float = 0.25, max_bid: float = 1.50) -> flo
     return round(max(min_bid, min(max_bid, float(value))), 2)
 
 
+# Named starting points matching the account's existing ACOS-tier system, so
+# onboarding a new ASIN can go "pick ASIN -> pick template -> review -> shadow
+# mode" instead of hand-configuring budget/bid/target ACOS from scratch. A
+# template only supplies defaults - explicit budget/fallback_bid arguments to
+# build_optimized_launch_preview still win, so the review step can tweak
+# numbers after picking a template. target_acos here is what should be saved
+# as this product's target_acos once the product record exists - that value
+# is what core.acos_policy and the ACOS circuit breaker already treat as the
+# canonical per-product ACOS knob, so a template's only real job is picking a
+# sensible value for it (plus a matching launch budget/bid) - not inventing a
+# parallel config system.
+CAMPAIGN_TEMPLATES: Dict[str, Dict[str, Any]] = {
+    "DEFENSIVE": {
+        "label": "Defensive",
+        "target_acos": 0.15,
+        "budget": 6.0,
+        "fallback_bid": 0.60,
+        "purpose": "Protect margin on a thin-margin product: small spend, tight ACOS ceiling.",
+    },
+    "CORE": {
+        "label": "Core",
+        "target_acos": 0.25,
+        "budget": 10.0,
+        "fallback_bid": 0.75,
+        "purpose": "Standard steady-state spend for an established, profitable product.",
+    },
+    "HIGH_LTV": {
+        "label": "High-LTV",
+        "target_acos": 0.40,
+        "budget": 15.0,
+        "fallback_bid": 1.00,
+        "purpose": "Spend more aggressively where a higher acquisition cost still pays back over the customer's lifetime.",
+    },
+    "LAUNCH": {
+        "label": "Launch",
+        "target_acos": 0.35,
+        "budget": 12.0,
+        "fallback_bid": 0.85,
+        "purpose": "New listing: wider keyword net, tolerant ACOS while it establishes organic rank. Pair with shadow mode before committing real spend.",
+    },
+}
+
+
+def normalize_template_key(template: str) -> str:
+    return re.sub(r"[\s-]+", "_", template.strip()).upper()
+
+
+def resolve_campaign_template(
+    template: Optional[str],
+    budget: Optional[float] = None,
+    fallback_bid: Optional[float] = None,
+) -> Dict[str, Any]:
+    """Resolve a named template into concrete launch parameters. Explicit
+    budget/fallback_bid, when given, override the template's defaults so a
+    tenant can pick a template and still fine-tune it before shadow mode.
+
+    Raises ValueError on an unknown template name - fail loudly rather than
+    silently falling back to Core, since picking the wrong ACOS tier changes
+    real spend."""
+    if not template:
+        return {
+            "template": None,
+            "template_label": None,
+            "template_purpose": None,
+            "target_acos": None,
+            "budget": budget if budget is not None else 10.0,
+            "fallback_bid": fallback_bid if fallback_bid is not None else 0.75,
+        }
+
+    key = normalize_template_key(template)
+    config = CAMPAIGN_TEMPLATES.get(key)
+    if config is None:
+        valid = ", ".join(CAMPAIGN_TEMPLATES)
+        raise ValueError(f"Unknown campaign template '{template}'. Valid templates: {valid}")
+
+    return {
+        "template": key,
+        "template_label": config["label"],
+        "template_purpose": config["purpose"],
+        "target_acos": config["target_acos"],
+        "budget": budget if budget is not None else config["budget"],
+        "fallback_bid": fallback_bid if fallback_bid is not None else config["fallback_bid"],
+    }
+
+
 def build_bid_plan(keyword: str, rec: Optional[Dict[str, Any]], fallback_bid: float, mode: str) -> Dict[str, Any]:
     rec = rec or {}
     low = float(rec.get("low") or 0)
@@ -115,16 +200,19 @@ def build_bid_plan(keyword: str, rec: Optional[Dict[str, Any]], fallback_bid: fl
 def build_optimized_launch_preview(
     product: Dict[str, Any],
     manual_keywords: Optional[List[str]] = None,
-    budget: float = 10.0,
-    fallback_bid: float = 0.75,
+    budget: Optional[float] = None,
+    fallback_bid: Optional[float] = None,
     bid_mode: str = "NORMAL",
     bid_recommendations: Optional[Dict[str, Dict[str, Any]]] = None,
+    template: Optional[str] = None,
 ) -> Dict[str, Any]:
     title = str(product.get("title") or product.get("name") or product.get("productName") or "Untitled Product")
     asin = str(product.get("asin") or product.get("ASIN") or "")
     sku = str(product.get("sku") or product.get("sellerSku") or product.get("SKU") or "")
-    safe_budget = round(max(3.0, min(50.0, float(budget or 10.0))), 2)
-    safe_fallback = clamp_bid(fallback_bid)
+
+    resolved = resolve_campaign_template(template, budget, fallback_bid)
+    safe_budget = round(max(3.0, min(50.0, float(resolved["budget"]))), 2)
+    safe_fallback = clamp_bid(resolved["fallback_bid"])
 
     keywords = generate_launch_keywords(product, manual_keywords)
     bid_recommendations = bid_recommendations or {}
@@ -146,6 +234,10 @@ def build_optimized_launch_preview(
             "bid_mode": bid_mode,
             "max_bid_guardrail": 1.50,
             "min_bid_guardrail": 0.25,
+            "template": resolved["template"],
+            "template_label": resolved["template_label"],
+            "template_purpose": resolved["template_purpose"],
+            "target_acos": resolved["target_acos"],
         },
         "campaigns": [
             {
@@ -182,5 +274,11 @@ def build_optimized_launch_preview(
             "Lower bids for heavy/low-margin products such as bagged compost.",
             "Keep the Auto Discovery budget small until converting search terms appear.",
             "Use negative keywords after 20+ clicks with zero orders.",
-        ],
+        ] + ([
+            f"Save this product's Target ACOS as {resolved['target_acos']:.0%} "
+            f"(the '{resolved['template_label']}' template) once the product record exists - "
+            "that value is what the bid optimizer and ACOS circuit breaker both key off of.",
+            "Run in shadow mode (dry-run) before confirming, and re-check with this same template "
+            "any time - not only during initial onboarding.",
+        ] if resolved["template"] else []),
     }

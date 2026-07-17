@@ -11,7 +11,7 @@ from typing import Any, Dict, List, Optional
 from fastapi import Header, HTTPException
 from fastapi.responses import JSONResponse
 
-from optimized_launch_preview import build_optimized_launch_preview
+from optimized_launch_preview import CAMPAIGN_TEMPLATES, build_optimized_launch_preview
 
 
 def extract_amazon_created_id(resp: Dict[str, Any], batch_key: str, item_key: str, id_key: str) -> Optional[str]:
@@ -54,7 +54,23 @@ def register_optimized_launch_routes(
     save_optimizer_history,
     logger,
 ):
-    """Attach /api/launch-optimized to the FastAPI app."""
+    """Attach /api/launch-optimized and /api/campaign-templates to the FastAPI app."""
+
+    @app.get("/api/campaign-templates")
+    def campaign_templates(
+        authorization: Optional[str] = Header(None),
+        x_daily_optimizer_token: Optional[str] = Header(None),
+    ):
+        """The 4 named ACOS-tier templates /api/launch-optimized accepts, for
+        a picker UI to render without hardcoding template data on the
+        frontend."""
+        verify_internal_token(authorization, x_daily_optimizer_token)
+        return {
+            "templates": {
+                key: {k: v for k, v in config.items()}
+                for key, config in CAMPAIGN_TEMPLATES.items()
+            }
+        }
 
     @app.post("/api/launch-optimized")
     def launch_optimized(
@@ -91,18 +107,30 @@ def register_optimized_launch_routes(
         if not isinstance(manual_keywords, list):
             raise HTTPException(status_code=400, detail="keywords must be list or comma-separated string")
 
+        raw_budget = payload.get("budget")
         try:
-            budget = float(payload.get("budget", 10.0))
+            budget = float(raw_budget) if raw_budget is not None else None
         except (TypeError, ValueError):
             raise HTTPException(status_code=400, detail="budget must be a number")
 
-        preview = build_optimized_launch_preview(
-            product=product,
-            manual_keywords=[str(k) for k in manual_keywords],
-            budget=budget,
-            fallback_bid=DEFAULT_FALLBACK_BID,
-            bid_mode=get_bid_mode(),
-        )
+        template = payload.get("template")
+
+        # Preserve the pre-template default (budget=10.0) when no template is
+        # picked and the caller didn't specify one either.
+        if template is None and budget is None:
+            budget = 10.0
+
+        try:
+            preview = build_optimized_launch_preview(
+                product=product,
+                manual_keywords=[str(k) for k in manual_keywords],
+                budget=budget,
+                fallback_bid=None if template else DEFAULT_FALLBACK_BID,
+                bid_mode=get_bid_mode(),
+                template=template,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
 
         if not confirm:
             preview["message"] = "Preview only. To create campaigns, call this endpoint again with confirm: true."

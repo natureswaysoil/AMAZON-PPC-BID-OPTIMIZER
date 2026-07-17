@@ -74,6 +74,11 @@ def main():
             from jobs.optimization.aov_bid_optimizer import run_aov_optimizer
 
             run_aov_optimizer()
+        elif job_type == "preview_optimization":
+            _validate_optimizer_data()
+            from jobs.optimization.aov_bid_optimizer import run_preview_optimization
+
+            run_preview_optimization()
         elif job_type == "keyword_harvester":
             from jobs.optimization.keyword_harvester import run_keyword_harvester
 

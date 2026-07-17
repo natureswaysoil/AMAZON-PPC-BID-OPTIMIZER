@@ -6,13 +6,54 @@ from core.config import (
     get_time_multiplier, MAX_BID_AS_PERCENT_OF_AOV, settings
 )
 from core.acos_policy import get_target_acos
+from core.rule_engine import Rule, apply_stacked_rules, load_rules_for_campaign
 from aov_fetcher import aov_fetcher
 from shared.amazon_client import amazon_client
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
+from typing import Any, Callable, Dict, List, Optional
 import logging
 
 logger = logging.getLogger(__name__)
+
+
+def summarize_preview(rows: List[Dict[str, Any]], optimizations: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """Build the projected-impact summary returned by preview_optimization.
+    Pure function of already-evaluated results - kept separate from
+    preview_optimization so it's testable without BigQuery."""
+    increases = [o for o in optimizations if not o["pause_recommended"] and o["new_bid"] > o["current_bid"]]
+    decreases = [o for o in optimizations if not o["pause_recommended"] and o["new_bid"] < o["current_bid"]]
+    paused = [o for o in optimizations if o["pause_recommended"]]
+
+    current_total = sum(o["current_bid"] for o in optimizations)
+    projected_total = sum(o["new_bid"] for o in optimizations)
+
+    sample = sorted(optimizations, key=lambda o: abs(o["new_bid"] - o["current_bid"]), reverse=True)[:20]
+
+    return {
+        "dry_run": True,
+        "message": "Preview only - no bids were changed and no Amazon Ads calls were made.",
+        "keywords_evaluated": len(rows),
+        "keywords_with_projected_changes": len(optimizations),
+        "keywords_projected_to_increase": len(increases),
+        "keywords_projected_to_decrease": len(decreases),
+        "keywords_projected_to_pause": len(paused),
+        "current_bid_total": round(current_total, 2),
+        "projected_bid_total": round(projected_total, 2),
+        "projected_bid_delta": round(projected_total - current_total, 2),
+        "sample_changes": [
+            {
+                "keyword_id": o["keyword_id"],
+                "keyword_text": o["keyword_text"],
+                "campaign_id": o["campaign_id"],
+                "current_bid": o["current_bid"],
+                "new_bid": o["new_bid"],
+                "pause_recommended": o["pause_recommended"],
+                "reasoning": o["reasoning"],
+            }
+            for o in sample
+        ],
+    }
 
 
 class AOVBidOptimizer:
@@ -109,14 +150,24 @@ class AOVBidOptimizer:
             decrease_factor = max(1 - settings.MAX_DOWN_PCT_PER_RUN, target_acos / acos)
             new_bid = current_bid * decrease_factor
 
-        # Per-run movement rails.
+        # Per-run movement rails. This is the outer speed limit: regardless of
+        # where the tier ceiling sits, a bid may only move by up to
+        # MAX_UP/DOWN_PCT_PER_RUN in a single run. The increase branches above
+        # already clamp to `ceiling` themselves (min(current_bid * x, ceiling))
+        # where that matters; re-clamping to `ceiling` again here - after the
+        # per-run rails - used to let a low ceiling (e.g. a Tier C/D keyword
+        # whose AOV/performance ceiling sits well under its current bid) override
+        # the per-run floor and cut a bid by 60-80% in one run instead of the
+        # intended max MAX_DOWN_PCT_PER_RUN (see bid_optimization_log around
+        # 2026-07-16/17 for real examples). Only MAX_BID/MIN_BID - true global
+        # limits, not tier-specific - belong in this final clamp.
         max_allowed = current_bid * (1 + settings.MAX_UP_PCT_PER_RUN)
         min_allowed = current_bid * (1 - settings.MAX_DOWN_PCT_PER_RUN)
         new_bid = min(new_bid, max_allowed)
         new_bid = max(new_bid, min_allowed)
 
-        # Global and AOV-based rails.
-        new_bid = min(new_bid, ceiling, settings.MAX_BID)
+        # Global rails.
+        new_bid = min(new_bid, settings.MAX_BID)
         new_bid = max(settings.MIN_BID, new_bid)
 
         # Ignore changes smaller than five percent.
@@ -143,17 +194,10 @@ class AOVBidOptimizer:
             "safety_ceiling": round(aov_safety_ceiling, 2),
         }
 
-    def optimize_all_keywords(self) -> list:
-        """Get all keywords and calculate optimal bids."""
-        logger.info("Fetching real-time AOV data...")
-        try:
-            aov_fetcher.fetch_all()
-        except Exception as exc:
-            logger.error(f"Failed to fetch AOV data: {exc}")
-            logger.info("Continuing with default AOV values...")
-
-        current_hour = datetime.now(ZoneInfo(settings.TIMEZONE)).hour
-
+    def fetch_keyword_performance_rows(self) -> list:
+        """Fetch the last-30d keyword performance rows optimization decisions
+        are based on. Read-only - shared by the live job and preview_optimization
+        so a preview looks at exactly the same input data as a real run."""
         query = """
         WITH keyword_performance AS (
           SELECT
@@ -192,22 +236,46 @@ class AOVBidOptimizer:
         """.format(project=settings.PROJECT_ID, dataset=settings.BIGQUERY_DATASET)
 
         try:
-            results = self.bq_client.query(query).result()
+            return [dict(row) for row in self.bq_client.query(query).result()]
         except Exception as exc:
             logger.error(f"Query failed: {exc}")
             return []
 
+    def evaluate_keywords(
+        self,
+        rows: List[Dict[str, Any]],
+        current_hour: int,
+        current_weekday: int,
+        target_acos: Optional[float] = None,
+        rules_resolver: Optional[Callable[[Any], List[Rule]]] = None,
+    ) -> list:
+        """Evaluate already-fetched keyword rows into bid decisions. Pure
+        with respect to BigQuery/Amazon writes - both the live job and
+        preview_optimization funnel through here, with the live job passing
+        no overrides (so it uses the persisted target ACOS and each
+        campaign's persisted stacking rules) and preview passing whatever
+        hypothetical values a tenant wants to test."""
+        resolve_rules = rules_resolver or load_rules_for_campaign
         optimizations = []
-        for row in results:
+        for row in rows:
             keyword_data = dict(row)
             campaign_id = keyword_data.get("campaign_id")
             aov_data = aov_fetcher.get_aov(campaign_id)
             keyword_data["aov"] = aov_data.aov
             keyword_data["aov_confidence"] = aov_data.confidence
-            keyword_data["target_acos"] = get_target_acos()
+            keyword_data["target_acos"] = target_acos if target_acos is not None else get_target_acos()
 
             try:
                 optimization = self.calculate_optimal_bid(keyword_data, current_hour)
+                optimization = apply_stacked_rules(
+                    optimization,
+                    keyword_data,
+                    rules=resolve_rules(campaign_id),
+                    hour=current_hour,
+                    weekday=current_weekday,
+                    min_bid=settings.MIN_BID,
+                    max_bid=settings.MAX_BID,
+                )
                 if optimization["new_bid"] != float(keyword_data["current_bid"]):
                     optimizations.append({
                         "keyword_id": keyword_data["keyword_id"],
@@ -221,10 +289,58 @@ class AOVBidOptimizer:
             except Exception as exc:
                 logger.error(f"Failed to optimize keyword {keyword_data.get('keyword_id')}: {exc}")
 
+        return optimizations
+
+    def optimize_all_keywords(self) -> list:
+        """Get all keywords and calculate optimal bids, using each campaign's
+        live persisted target ACOS and stacking rules, then log the result to
+        BigQuery. This is the real, committing run - see preview_optimization
+        for the read-only equivalent."""
+        logger.info("Fetching real-time AOV data...")
+        try:
+            aov_fetcher.fetch_all()
+        except Exception as exc:
+            logger.error(f"Failed to fetch AOV data: {exc}")
+            logger.info("Continuing with default AOV values...")
+
+        now_local = datetime.now(ZoneInfo(settings.TIMEZONE))
+        rows = self.fetch_keyword_performance_rows()
+        optimizations = self.evaluate_keywords(rows, now_local.hour, now_local.weekday())
+
         logger.info(f"Found {len(optimizations)} keywords to optimize")
         if optimizations:
             self._log_optimizations(optimizations)
         return optimizations
+
+    def preview_optimization(
+        self,
+        target_acos_override: Optional[float] = None,
+        rules_override: Optional[List[Rule]] = None,
+    ) -> Dict[str, Any]:
+        """Read-only: project what optimize_all_keywords would do against the
+        same recent-30d data, optionally substituting a hypothetical target
+        ACOS and/or stacking rule set instead of the persisted ones. Never
+        writes to BigQuery and never calls the Amazon Ads API - a tenant can
+        run this any time to test a rule/tier change before committing to it,
+        not only during the initial onboarding shadow-mode window.
+
+        rules_override, when given, applies to every campaign in this
+        preview (there is no per-campaign override map for a hypothetical
+        rule set - a tenant testing a change is testing one hypothesis at a
+        time, not a mix of campaign-specific configs).
+        """
+        rules_resolver = (lambda _campaign_id: rules_override) if rules_override is not None else None
+
+        now_local = datetime.now(ZoneInfo(settings.TIMEZONE))
+        rows = self.fetch_keyword_performance_rows()
+        optimizations = self.evaluate_keywords(
+            rows,
+            now_local.hour,
+            now_local.weekday(),
+            target_acos=target_acos_override,
+            rules_resolver=rules_resolver,
+        )
+        return summarize_preview(rows, optimizations)
 
     def _log_optimizations(self, optimizations: list):
         """Log optimization decisions to BigQuery."""
@@ -288,6 +404,45 @@ def run_aov_optimizer():
         logger.info(f"Total optimizations: {len(optimizations)}")
     else:
         logger.info("No keywords needed optimization")
+
+
+def run_preview_optimization():
+    """Entry point for an on-demand, read-only preview run (JOB_TYPE=preview_optimization).
+    Lets a tenant test a hypothetical target ACOS and/or stacking rule set
+    against recent data without committing to it - triggerable any time, not
+    only during initial onboarding shadow mode. Reads its overrides from env
+    vars since this is a Cloud Run Job (request/response params aren't
+    available here):
+
+      PREVIEW_TARGET_ACOS   optional float, e.g. "0.20"
+      PREVIEW_RULES_JSON    optional JSON list of {"type", "enabled", "params"}
+                            objects, same shape as backend/config/stacking_rules.json
+    """
+    import json
+    import os
+
+    logging.basicConfig(level=logging.INFO)
+    logger.info("Starting bid-optimization preview (read-only, no bids or campaigns will change)...")
+
+    target_acos_override = None
+    raw_target_acos = os.getenv("PREVIEW_TARGET_ACOS")
+    if raw_target_acos:
+        target_acos_override = float(raw_target_acos)
+
+    rules_override = None
+    raw_rules_json = os.getenv("PREVIEW_RULES_JSON")
+    if raw_rules_json:
+        rules_override = [
+            Rule(type=r["type"], enabled=bool(r.get("enabled", False)), params=r.get("params", {}))
+            for r in json.loads(raw_rules_json)
+        ]
+
+    optimizer = AOVBidOptimizer()
+    summary = optimizer.preview_optimization(
+        target_acos_override=target_acos_override,
+        rules_override=rules_override,
+    )
+    logger.info("Preview summary:\n%s", json.dumps(summary, indent=2, default=str))
 
 
 if __name__ == "__main__":

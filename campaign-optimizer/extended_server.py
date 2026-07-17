@@ -1106,3 +1106,65 @@ def api_update_product(
     optimize_campaigns._products_cache = None
 
     return JSONResponse({"success": True, "product_id": product_id, "updated_fields": list(set_clauses)})
+
+
+# ========================= STACKING RULES CONFIG =========================
+# Live-editable config for backend/core/rule_engine.py's stackable bid rules
+# (spend cap pause, off-peak bid reduction, weekend bid adjustment, inventory
+# days pause). This service only reads/writes the BigQuery-backed config -
+# backend/'s bid-optimizer job is what actually evaluates it on each run.
+
+from stacking_rules_store import InvalidRuleError, RULE_TYPE_METADATA, get_rules, save_rules  # noqa: E402
+
+
+@app.get("/api/stacking-rules/types")
+def api_stacking_rule_types(
+    authorization: Optional[str] = Header(default=None),
+    x_daily_optimizer_token: Optional[str] = Header(default=None),
+) -> JSONResponse:
+    """Available rule types and their param schema, for the UI to render
+    forms without hardcoding rule shapes on the frontend."""
+    verify_internal_token(authorization, x_daily_optimizer_token)
+    return JSONResponse({"types": RULE_TYPE_METADATA})
+
+
+@app.get("/api/stacking-rules")
+def api_get_stacking_rules(
+    scope: str = "default",
+    authorization: Optional[str] = Header(default=None),
+    x_daily_optimizer_token: Optional[str] = Header(default=None),
+) -> JSONResponse:
+    """Rules saved for one scope ('default' or a campaign_id). Does not fall
+    back to a different scope - that fallback (campaign -> default -> bundled
+    JSON) is the bid optimizer's read-time behavior; this endpoint reports
+    exactly what's saved for the scope asked about, so a blank campaign-level
+    config in the UI reads as blank, not silently inherited."""
+    verify_internal_token(authorization, x_daily_optimizer_token)
+    rules = get_rules(scope)
+    return JSONResponse({"scope": scope, "rules": rules})
+
+
+@app.put("/api/stacking-rules")
+def api_put_stacking_rules(
+    payload: Dict[str, Any] = Body(...),
+    authorization: Optional[str] = Header(default=None),
+    x_daily_optimizer_token: Optional[str] = Header(default=None),
+) -> JSONResponse:
+    """Save a rule list for a scope ('default' or a campaign_id), replacing
+    whatever was there. Body: {"scope": "default" | "<campaign_id>", "rules": [...]}."""
+    verify_internal_token(authorization, x_daily_optimizer_token)
+
+    scope = str(payload.get("scope") or "default")
+    rules = payload.get("rules")
+    if rules is None:
+        return JSONResponse({"error": True, "message": "'rules' is required"}, status_code=400)
+
+    try:
+        save_rules(scope, rules)
+    except InvalidRuleError as exc:
+        return JSONResponse({"error": True, "message": str(exc)}, status_code=400)
+    except Exception as exc:
+        logger.exception(f"Failed to save stacking rules for scope '{scope}'")
+        return JSONResponse({"error": True, "message": f"Failed to save: {exc}"}, status_code=502)
+
+    return JSONResponse({"success": True, "scope": scope, "rules": rules})
