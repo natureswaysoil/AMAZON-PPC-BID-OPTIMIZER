@@ -425,37 +425,18 @@ def api_products_with_live_bids():
     try:
         rows = load_products()
         products = [normalized_product(row) for row in rows]
-        client = None
-        campaigns: List[Dict[str, Any]] = []
-        try:
-            client = AmazonAdsClient()
-            campaigns = client.list_campaigns()
-        except Exception:
-            client = None
-        enriched = []
-        for raw_row, product in zip(rows, products):
-            product_campaign_id: Optional[str] = None
-            product_ad_group_id: Optional[str] = None
-            if client:
-                product_campaign_id, product_ad_group_id = _product_bid_context(
-                    client,
-                    campaigns,
-                    product,
-                )
-            enriched.append(
-                _enrich_product_bid(
-                    client,
-                    product_campaign_id,
-                    product_ad_group_id,
-                    raw_row,
-                    product,
-                )
-            )
+        # Keep the catalog request fast and deterministic. The launch modal calls
+        # /api/bid-recommendation for the selected product, so querying Amazon for
+        # every catalog row here only causes throttling.
+        enriched = [
+            _enrich_product_bid(None, None, None, raw_row, product)
+            for raw_row, product in zip(rows, products)
+        ]
         return JSONResponse({
             "count": len(enriched),
             "bid_mode": get_budget_protection_mode(),
             "budget_protection": budget_protection_status(),
-            "bid_context_available": bool(client and campaigns),
+            "bid_context_available": True,
             "products": enriched,
         })
     except Exception as exc:
