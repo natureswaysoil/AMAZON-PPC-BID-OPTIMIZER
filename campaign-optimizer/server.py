@@ -252,15 +252,23 @@ def _create_ad_group(client: AmazonAdsClient, campaign_id: str, name: str, defau
     return ad_group_id
 
 
-def _create_product_ad(client: AmazonAdsClient, campaign_id: str, ad_group_id: str, sku: str, asin: str) -> None:
+def _create_product_ad(client: AmazonAdsClient, campaign_id: str, ad_group_id: str, sku: str, asin: str) -> str:
     product_ad = {"campaignId": str(campaign_id), "adGroupId": str(ad_group_id), "state": "ENABLED"}
     if sku:
         product_ad["sku"] = sku
     if asin:
         product_ad["asin"] = asin
-    client.post("/sp/productAds", {"productAds": [product_ad]},
-                content_type="application/vnd.spproductad.v3+json",
-                accept="application/vnd.spproductad.v3+json")
+    response = client.post("/sp/productAds", {"productAds": [product_ad]},
+                           content_type="application/vnd.spproductad.v3+json",
+                           accept="application/vnd.spproductad.v3+json")
+    ad_id = _extract_id(response, "productAds", "productAd", "adId")
+    if not ad_id:
+        raise RuntimeError(
+            "Amazon rejected the product ad; campaign launch was stopped. "
+            f"Check listing advertising eligibility for SKU {sku or 'unknown'} / "
+            f"ASIN {asin or 'unknown'}: {response}"
+        )
+    return ad_id
 
 
 def _normalize_keyword(keyword: str) -> str:
@@ -496,33 +504,75 @@ def api_create_recommended_campaigns(
         discovery_bid = round(max(0.10, protected_bid * 0.70), 2)
         exact_bid = round(max(0.10, protected_bid * 1.15), 2)
 
-        raw_keywords = generate_keywords_for_product(product_row)
+        raw_keywords = list(dict.fromkeys(
+            _bid_keywords(product_row, product) + generate_keywords_for_product(product_row)
+        ))
         exact_keywords = _select_exact_keywords(raw_keywords, max_exact_keywords)
         client = AmazonAdsClient()
         start_date = datetime.date.today().isoformat()
         safe_title = _sanitize_name(str(product.get("title") or "Product"))[:70]
 
-        # 1) Amazon-recommended discovery: automatic targeting campaign.
-        discovery_campaign_id = _create_campaign(
-            client,
-            f"{safe_title} | AUTO DISCOVERY | {start_date}",
-            "AUTO",
-            discovery_budget,
-            start_date,
-        )
-        discovery_ad_group_id = _create_ad_group(client, discovery_campaign_id, "Auto Discovery", discovery_bid)
-        _create_product_ad(client, discovery_campaign_id, discovery_ad_group_id, sku, asin)
+        created_campaign_ids: List[str] = []
+        try:
+            # 1) Amazon-recommended discovery: automatic targeting campaign.
+            discovery_campaign_id = _create_campaign(
+                client,
+                f"{safe_title} | AUTO DISCOVERY | {start_date}",
+                "AUTO",
+                discovery_budget,
+                start_date,
+            )
+            created_campaign_ids.append(discovery_campaign_id)
+            discovery_ad_group_id = _create_ad_group(client, discovery_campaign_id, "Auto Discovery", discovery_bid)
+            _create_product_ad(client, discovery_campaign_id, discovery_ad_group_id, sku, asin)
 
-        # 2) Controlled harvesting campaign: exact-only manual campaign.
-        exact_campaign_id = _create_campaign(
-            client,
-            f"{safe_title} | MANUAL EXACT | {start_date}",
-            "MANUAL",
-            exact_budget,
-            start_date,
+            # 2) Controlled harvesting campaign: exact-only manual campaign.
+            exact_campaign_id = _create_campaign(
+                client,
+                f"{safe_title} | MANUAL EXACT | {start_date}",
+                "MANUAL",
+                exact_budget,
+                start_date,
+            )
+            created_campaign_ids.append(exact_campaign_id)
+            exact_ad_group_id = _create_ad_group(client, exact_campaign_id, "Exact Winners", exact_bid)
+            _create_product_ad(client, exact_campaign_id, exact_ad_group_id, sku, asin)
+        except Exception:
+            if created_campaign_ids:
+                try:
+                    client.put(
+                        "/sp/campaigns",
+                        {"campaigns": [
+                            {"campaignId": campaign_id, "state": "PAUSED"}
+                            for campaign_id in created_campaign_ids
+                        ]},
+                        content_type="application/vnd.spcampaign.v3+json",
+                        accept="application/vnd.spcampaign.v3+json",
+                    )
+                except Exception:
+                    pass
+            raise
+
+        # Once the exact ad group contains an eligible product, ask Amazon for
+        # its current auction recommendation before creating any keywords.
+        launch_bid_recommendation = client.get_bid_recommendation(
+            exact_campaign_id,
+            exact_ad_group_id,
+            exact_keywords[0] if exact_keywords else "fertilizer",
+            "EXACT",
         )
-        exact_ad_group_id = _create_ad_group(client, exact_campaign_id, "Exact Winners", exact_bid)
-        _create_product_ad(client, exact_campaign_id, exact_ad_group_id, sku, asin)
+        if launch_bid_recommendation.get("suggested"):
+            exact_bid = round(float(launch_bid_recommendation["suggested"]), 2)
+            discovery_bid = round(max(0.10, exact_bid * 0.70), 2)
+            client.put(
+                "/sp/adGroups",
+                {"adGroups": [
+                    {"adGroupId": exact_ad_group_id, "defaultBid": exact_bid, "state": "ENABLED"},
+                    {"adGroupId": discovery_ad_group_id, "defaultBid": discovery_bid, "state": "ENABLED"},
+                ]},
+                content_type="application/vnd.spadgroup.v3+json",
+                accept="application/vnd.spadgroup.v3+json",
+            )
 
         exact_rows = _exact_keyword_rows(exact_keywords, exact_campaign_id, exact_ad_group_id, exact_bid)
         exact_keywords_created = 0
@@ -541,6 +591,7 @@ def api_create_recommended_campaigns(
             "asin": asin,
             "total_daily_budget": total_budget,
             "budget_protection": budget_protection_status(),
+            "amazon_launch_bid_recommendation": launch_bid_recommendation,
             "launch_negatives": launch_negatives,
             "keyword_filtering": {
                 "generated_keywords_count": len(raw_keywords),

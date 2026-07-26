@@ -40,7 +40,11 @@ from server import app
 import optimize_campaigns
 from optimize_campaigns import AmazonAdsClient, DEFAULT_FALLBACK_BID, generate_keywords_for_product, load_products, normalized_product, parse_report_json_bytes, verify_internal_token
 from budget_dayparting import budget_protection_status, choose_budget_protected_bid
-from ppc_waste_rules import classify_search_terms, summarize_classification
+from ppc_waste_rules import (
+    apply_negatives_step_with_match_types,
+    classify_search_terms,
+    summarize_classification,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -459,6 +463,96 @@ def api_harvest_discovery_winners(
             "terms_harvested": selected_terms,
             "skipped_existing_sample": skipped_existing[:25],
             "summary": summarize_classification(classified),
+        })
+    except Exception as exc:
+        return JSONResponse({"error": True, "message": str(exc)}, status_code=500)
+
+
+@app.post("/api/harvest-all-discovery")
+def api_harvest_all_discovery(
+    payload: Dict[str, Any] = Body(default={}),
+    authorization: Optional[str] = Header(default=None),
+    x_daily_optimizer_token: Optional[str] = Header(default=None),
+) -> JSONResponse:
+    """Promote AUTO winners into paired EXACT campaigns and block AUTO waste."""
+    verify_internal_token(authorization, x_daily_optimizer_token)
+    try:
+        lookback_days = max(1, min(60, int(payload.get("lookback_days", 14))))
+        max_terms = max(1, min(50, int(payload.get("max_terms_per_product", 10))))
+        apply_live = bool(payload.get("apply_live", True))
+        client = AmazonAdsClient()
+        rows, report_id, start_date, end_date = _search_term_rows(client, lookback_days)
+        results: List[Dict[str, Any]] = []
+
+        for raw_product in load_products():
+            product = normalized_product(raw_product)
+            existing = _find_existing_launch_campaigns(client, _safe_title(product))
+            discovery = existing.get("AUTO_DISCOVERY")
+            exact = existing.get("MANUAL_EXACT")
+            if not discovery or not exact:
+                continue
+            discovery_campaign_id = str(discovery.get("campaignId") or "")
+            exact_campaign_id = str(exact.get("campaignId") or "")
+            exact_groups = _list_ad_groups(client, exact_campaign_id)
+            if not exact_groups:
+                continue
+            exact_group = exact_groups[0]
+            exact_ad_group_id = str(exact_group.get("adGroupId") or "")
+            exact_bid = round(float(exact_group.get("defaultBid") or DEFAULT_FALLBACK_BID), 2)
+            discovery_rows = [
+                row for row in rows
+                if str(row.get("campaignId") or "") == discovery_campaign_id
+            ]
+            classified = classify_search_terms(discovery_rows)
+            existing_terms = {
+                base._normalize_keyword(keyword.get("keywordText"))
+                for keyword in client.list_keywords(exact_campaign_id)
+                if str(keyword.get("matchType") or "").upper() == "EXACT"
+            }
+            selected: List[str] = []
+            for item in sorted(
+                classified.get("winners", []),
+                key=lambda value: (
+                    float(value.get("sales") or 0),
+                    -float(value.get("acos") or 9),
+                ),
+                reverse=True,
+            ):
+                term = base._normalize_keyword(item.get("term"))
+                if not term or term in existing_terms:
+                    continue
+                selected.append(term)
+                existing_terms.add(term)
+                if len(selected) >= max_terms:
+                    break
+            keyword_rows = base._exact_keyword_rows(
+                selected, exact_campaign_id, exact_ad_group_id, exact_bid
+            )
+            negatives_applied: List[Dict[str, Any]] = []
+            if apply_live:
+                if keyword_rows:
+                    client.create_keywords(keyword_rows)
+                negatives_applied = apply_negatives_step_with_match_types(client, classified)
+            results.append({
+                "product_id": str(product.get("product_id") or product.get("sku") or ""),
+                "discovery_campaign_id": discovery_campaign_id,
+                "exact_campaign_id": exact_campaign_id,
+                "search_terms_analyzed": len(discovery_rows),
+                "winners_created": len(keyword_rows) if apply_live else 0,
+                "winner_terms": selected,
+                "negative_groups_applied": len(negatives_applied),
+                "negative_terms_found": len(classified.get("negatives", [])),
+            })
+
+        return JSONResponse({
+            "success": True,
+            "apply_live": apply_live,
+            "report_id": report_id,
+            "date_range": {"start": start_date, "end": end_date},
+            "products_processed": len(results),
+            "keywords_created": sum(item["winners_created"] for item in results),
+            "negative_terms_found": sum(item["negative_terms_found"] for item in results),
+            "results": results,
         })
     except Exception as exc:
         return JSONResponse({"error": True, "message": str(exc)}, status_code=500)
