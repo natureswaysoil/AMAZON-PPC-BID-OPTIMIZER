@@ -58,15 +58,17 @@ def main():
     logger.info("Time: %s", datetime.now().strftime("%Y-%m-%d %H:%M:%S %Z"))
     logger.info("=" * 60)
 
-    logger.info("Refreshing Amazon API token...")
-    try:
-        from shared.token_manager import token_manager
+    # BigQuery-only maintenance jobs do not need Amazon Ads credentials.
+    if job_type != "aov_refresh":
+        logger.info("Refreshing Amazon API token...")
+        try:
+            from shared.token_manager import token_manager
 
-        token_manager.get_access_token()
-        logger.info("Token ready")
-    except Exception as exc:
-        logger.error("Failed to initialize authentication: %s", exc)
-        sys.exit(1)
+            token_manager.get_access_token()
+            logger.info("Token ready")
+        except Exception as exc:
+            logger.error("Failed to initialize authentication: %s", exc)
+            sys.exit(1)
 
     try:
         if job_type in ["aov_optimizer", "bid_optimizer"]:
@@ -87,6 +89,10 @@ def main():
             from jobs.data_sync.amazon_ads_sync import run_amazon_ads_sync
 
             run_amazon_ads_sync()
+        elif job_type == "aov_refresh":
+            from jobs.ingestion.aov_refresh import run_aov_refresh
+
+            run_aov_refresh()
         else:
             raise ValueError(f"Unknown job type: {job_type}")
     except Exception as exc:
