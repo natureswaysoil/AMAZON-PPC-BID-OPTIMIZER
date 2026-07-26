@@ -106,11 +106,21 @@ def _first_bid_context(client: AmazonAdsClient) -> Tuple[Optional[str], Optional
     return None, None
 
 
-def _primary_keyword(raw_row: Dict[str, Any], product: Dict[str, Any]) -> str:
+def _bid_keywords(raw_row: Dict[str, Any], product: Dict[str, Any]) -> List[str]:
+    """Return buyer-intent phrases before generic one-word feed keywords."""
     try:
-        keywords = generate_keywords_for_product(raw_row, limit=1)
+        keywords = generate_keywords_for_product(raw_row, limit=30)
         if keywords:
-            return keywords[0]
+            generic = GENERIC_EXACT_BLOCKLIST
+            return sorted(
+                keywords,
+                key=lambda keyword: (
+                    "fertilizer" not in keyword.lower(),
+                    len(keyword.split()) < 2,
+                    keyword.lower() in generic,
+                    -len(keyword.split()),
+                ),
+            )
     except Exception:
         pass
 
@@ -120,8 +130,35 @@ def _primary_keyword(raw_row: Dict[str, Any], product: Dict[str, Any]) -> str:
         "bone meal", "pasture fertilizer", "lawn fertilizer", "compost",
     ):
         if phrase in title:
-            return phrase
-    return "fertilizer"
+            return [phrase]
+    return ["fertilizer"]
+
+
+def _product_bid_context(
+    client: AmazonAdsClient,
+    campaigns: List[Dict[str, Any]],
+    product: Dict[str, Any],
+    fallback: Tuple[Optional[str], Optional[str]],
+) -> Tuple[Optional[str], Optional[str]]:
+    """Prefer this product's exact campaign because recommendations are ad-group scoped."""
+    title = _sanitize_name(str(product.get("title") or "")).lower()[:45]
+    asin = str(product.get("asin") or "").lower()
+    sku = str(product.get("sku") or "").lower()
+    for campaign in campaigns:
+        name = _sanitize_name(str(campaign.get("name") or "")).lower()
+        if "manual exact" not in name:
+            continue
+        if not ((title and title in name) or (asin and asin in name) or (sku and sku in name)):
+            continue
+        campaign_id = str(campaign.get("campaignId") or "")
+        try:
+            for keyword in client.list_keywords(campaign_id):
+                ad_group_id = str(keyword.get("adGroupId") or "")
+                if ad_group_id:
+                    return campaign_id, ad_group_id
+        except Exception:
+            continue
+    return fallback
 
 
 def _sanitize_name(name: str) -> str:
@@ -296,7 +333,8 @@ def _enrich_product_bid(
     product: Dict[str, Any],
 ) -> Dict[str, Any]:
     fallback_bid = float(product.get("suggested_bid") or DEFAULT_FALLBACK_BID)
-    keyword = _primary_keyword(raw_row, product)
+    keywords = _bid_keywords(raw_row, product)
+    keyword = keywords[0]
     status = budget_protection_status()
 
     product["bid_mode"] = status["bid_mode"]
@@ -314,7 +352,18 @@ def _enrich_product_bid(
         return product
 
     try:
-        rec = client.get_bid_recommendation(campaign_id=campaign_id, ad_group_id=ad_group_id, keyword=keyword, match_type="PHRASE")
+        rec: Dict[str, float] = {}
+        for candidate in keywords[:8]:
+            rec = client.get_bid_recommendation(
+                campaign_id=campaign_id,
+                ad_group_id=ad_group_id,
+                keyword=candidate,
+                match_type="EXACT",
+            )
+            if rec:
+                keyword = candidate
+                product["bid_keyword"] = candidate
+                break
         low, high, applied = choose_budget_protected_bid(rec, fallback_bid)
         if low > 0 and high > 0:
             product["suggested_bid"] = applied
@@ -363,12 +412,32 @@ def api_products_with_live_bids():
         client = None
         campaign_id = None
         ad_group_id = None
+        campaigns: List[Dict[str, Any]] = []
         try:
             client = AmazonAdsClient()
+            campaigns = client.list_campaigns()
             campaign_id, ad_group_id = _first_bid_context(client)
         except Exception:
             client = None
-        enriched = [_enrich_product_bid(client, campaign_id, ad_group_id, raw_row, product) for raw_row, product in zip(rows, products)]
+        enriched = []
+        for raw_row, product in zip(rows, products):
+            product_campaign_id, product_ad_group_id = (campaign_id, ad_group_id)
+            if client:
+                product_campaign_id, product_ad_group_id = _product_bid_context(
+                    client,
+                    campaigns,
+                    product,
+                    (campaign_id, ad_group_id),
+                )
+            enriched.append(
+                _enrich_product_bid(
+                    client,
+                    product_campaign_id,
+                    product_ad_group_id,
+                    raw_row,
+                    product,
+                )
+            )
         return JSONResponse({
             "count": len(enriched),
             "bid_mode": get_budget_protection_mode(),
