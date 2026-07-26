@@ -1581,33 +1581,57 @@ def api_bid_recommendation(
         client = AmazonAdsClient()
         mode = get_bid_mode()
 
-        # Try to find a campaign/ad-group keyword context related to the requested keyword.
+        # Find the selected product's manual exact campaign. Bid recommendations
+        # are ad-group scoped, so an unrelated campaign can return 422 or no range.
         try:
             campaigns = client.list_campaigns()
-            cid, ag_id, kw_text, match_type = "", "", keyword, "PHRASE"
-            needle = (keyword or "").strip().lower()
+            cid, ag_id, kw_text, match_type = "", "", keyword, "EXACT"
+            title = re.sub(r"[^a-z0-9 ]+", " ", (keyword or "").lower())
+            title = re.sub(r"\s+", " ", title).strip()
+            asin_needle = (asin or "").strip().lower()
+            preferred_phrases = (
+                ("tomato", "tomato fertilizer"),
+                ("dog urine", "dog urine lawn repair"),
+                ("fruit tree", "fruit tree fertilizer"),
+                ("liquid kelp", "liquid kelp fertilizer"),
+                ("bone meal", "liquid bone meal fertilizer"),
+                ("orchid", "orchid fertilizer"),
+                ("pasture", "pasture fertilizer"),
+                ("humic", "humic acid soil conditioner"),
+                ("biochar", "biochar soil conditioner"),
+            )
+            for marker, phrase in preferred_phrases:
+                if marker in title:
+                    kw_text = phrase
+                    break
 
-            for camp in campaigns[:30]:
+            ranked_campaigns = sorted(
+                campaigns,
+                key=lambda camp: (
+                    "manual exact" not in str(camp.get("name") or "").lower(),
+                    not (
+                        (asin_needle and asin_needle in str(camp.get("name") or "").lower())
+                        or (title[:40] and title[:40] in re.sub(r"[^a-z0-9 ]+", " ", str(camp.get("name") or "").lower()))
+                    ),
+                ),
+            )
+            for camp in ranked_campaigns:
+                campaign_name = re.sub(r"[^a-z0-9 ]+", " ", str(camp.get("name") or "").lower())
+                product_match = (
+                    (asin_needle and asin_needle in campaign_name)
+                    or (title[:40] and title[:40] in campaign_name)
+                )
+                if not product_match or "manual exact" not in campaign_name:
+                    continue
                 candidate_cid = str(camp.get("campaignId", ""))
                 if not candidate_cid:
                     continue
                 kws = client.list_keywords(candidate_cid)
                 if not kws:
                     continue
-
-                match_kw = None
-                if needle:
-                    for k in kws[:80]:
-                        kt = str(k.get("keywordText") or "").lower()
-                        if needle in kt or kt in needle:
-                            match_kw = k
-                            break
-
-                kw = match_kw or kws[0]
+                kw = kws[0]
                 cid = candidate_cid
                 ag_id = str(kw.get("adGroupId", ""))
-                kw_text = str(kw.get("keywordText") or keyword or "fertilizer")
-                match_type = str(kw.get("matchType") or "PHRASE")
                 if ag_id:
                     break
         except Exception:
