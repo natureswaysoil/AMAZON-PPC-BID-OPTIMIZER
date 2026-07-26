@@ -565,19 +565,34 @@ class AmazonAdsClient:
                 return campaigns
 
     def list_keywords(self, campaign_id: str) -> List[Dict[str, Any]]:
-        data = self.post(
-            "/sp/keywords/list",
-            {
+        keywords: List[Dict[str, Any]] = []
+        next_token: Optional[str] = None
+        while True:
+            body: Dict[str, Any] = {
                 "maxResults": 100,
                 "filters": {
                     "campaignIdFilter": {"include": [str(campaign_id)]},
                     "stateFilter": {"include": ["ENABLED"]},
                 },
-            },
-            content_type=MEDIA_TYPES["keywords_v3"],
-            accept=MEDIA_TYPES["keywords_v3"],
-        )
-        return data.get("keywords", [])
+            }
+            if next_token:
+                body["nextToken"] = next_token
+            data = self.post(
+                "/sp/keywords/list",
+                body,
+                content_type=MEDIA_TYPES["keywords_v3"],
+                accept=MEDIA_TYPES["keywords_v3"],
+            )
+            # Amazon has occasionally ignored campaignIdFilter. Never trust the
+            # server-side filter for a mutation path; verify ownership locally.
+            keywords.extend(
+                keyword
+                for keyword in data.get("keywords", [])
+                if str(keyword.get("campaignId") or "") == str(campaign_id)
+            )
+            next_token = data.get("nextToken")
+            if not next_token:
+                return keywords
 
     def create_keywords(self, rows: List[Dict[str, Any]]) -> Dict[str, Any]:
         return self.post(
