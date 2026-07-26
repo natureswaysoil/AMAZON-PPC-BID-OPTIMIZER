@@ -113,14 +113,18 @@ def _bid_keywords(raw_row: Dict[str, Any], product: Dict[str, Any]) -> List[str]
     for marker, phrase in (
         ("tomato", "tomato fertilizer"),
         ("dog urine", "dog urine lawn repair"),
+        ("kennel cleaner", "kennel cleaner"),
         ("fruit tree", "fruit tree fertilizer"),
         ("liquid kelp", "liquid kelp fertilizer"),
         ("bone meal", "liquid bone meal fertilizer"),
         ("orchid", "orchid fertilizer"),
         ("pasture", "pasture fertilizer"),
         ("lawn fertilizer", "lawn fertilizer"),
-        ("humic", "humic acid soil conditioner"),
+        ("compost", "organic compost"),
+        ("booster and loosener", "soil conditioner"),
         ("biochar", "biochar soil conditioner"),
+        ("humic", "humic acid soil conditioner"),
+        ("organic liquid fertilizer", "organic liquid fertilizer"),
     ):
         if marker in title:
             preferred.append(phrase)
@@ -288,6 +292,12 @@ def _select_exact_keywords(keywords: List[str], max_keywords: int) -> List[str]:
         seen.add(kw)
         # Do not launch exact campaigns on single generic words like compost/soil.
         if kw in GENERIC_EXACT_BLOCKLIST:
+            continue
+        if (
+            "nature way" in kw
+            or "natures way" in kw
+            or kw.startswith("way soil")
+        ):
             continue
         # Prefer phrase keywords; one-word terms only survive if they are distinctive.
         if len(kw.split()) == 1 and len(kw) < 7:
