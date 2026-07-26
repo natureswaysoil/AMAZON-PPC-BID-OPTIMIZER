@@ -629,29 +629,42 @@ class AmazonAdsClient:
         keyword: str,
         match_type: str = "PHRASE",
     ) -> Dict[str, float]:
+        expression_types = {
+            "EXACT": "KEYWORD_EXACT_MATCH",
+            "PHRASE": "KEYWORD_PHRASE_MATCH",
+            "BROAD": "KEYWORD_BROAD_MATCH",
+        }
+        expression_type = expression_types.get(str(match_type).upper(), "KEYWORD_PHRASE_MATCH")
+        media_type = "application/vnd.spthemebasedbidrecommendation.v3+json"
         try:
             data = self.post(
-                "/sp/keywords/bidRecommendations",
+                "/sp/targets/bid/recommendations",
                 {
-                    "recommendations": [{
-                        "campaignId": str(campaign_id),
-                        "adGroupId": str(ad_group_id),
-                        "keywordText": keyword,
-                        "matchType": str(match_type).upper(),
-                    }]
+                    "recommendationType": "BIDS_FOR_EXISTING_AD_GROUP",
+                    "campaignId": str(campaign_id),
+                    "adGroupId": str(ad_group_id),
+                    "targetingExpressions": [{
+                        "type": expression_type,
+                        "value": str(keyword),
+                    }],
                 },
-                content_type=MEDIA_TYPES["bid_rec_v3"],
-                accept=MEDIA_TYPES["bid_rec_v3"],
+                content_type=media_type,
+                accept=media_type,
             )
-            recs = data.get("recommendations", [])
-            if not recs:
+            bid_values: List[float] = []
+            for recommendation in data.get("bidRecommendations", []):
+                for target in recommendation.get("bidRecommendationsForTargetingExpressions", []):
+                    for value in target.get("bidValues", []):
+                        suggested = value.get("suggestedBid")
+                        if isinstance(suggested, (int, float)) and suggested > 0:
+                            bid_values.append(float(suggested))
+            if not bid_values:
                 return {}
-
-            rec = recs[0]
+            bid_values.sort()
             return {
-                "low": rec.get("suggestedBidLow"),
-                "high": rec.get("suggestedBidHigh"),
-                "suggested": rec.get("suggestedBid"),
+                "low": bid_values[0],
+                "high": bid_values[-1],
+                "suggested": bid_values[len(bid_values) // 2],
             }
         except Exception as e:
             logger.warning("Bid recommendation unavailable for %s: %s", keyword, e)

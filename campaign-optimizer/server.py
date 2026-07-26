@@ -426,7 +426,10 @@ def api_create_recommended_campaigns(
         max_exact_keywords = max(5, min(80, max_exact_keywords))
 
         # Protect discovery bids more aggressively. Exact gets the higher-quality budget.
-        _, _, protected_bid = choose_budget_protected_bid({}, base_bid)
+        # The product endpoint already applies the active daypart protection
+        # to Amazon's recommendation (or its fallback). Do not apply the
+        # protection multiplier a second time during campaign creation.
+        protected_bid = base_bid
         discovery_bid = round(max(0.10, protected_bid * 0.70), 2)
         exact_bid = round(max(0.10, protected_bid * 1.15), 2)
 
