@@ -267,19 +267,35 @@ def _find_existing_launch_campaigns(client: AmazonAdsClient, safe_title: str) ->
 
 
 def _list_ad_groups(client: AmazonAdsClient, campaign_id: str) -> List[Dict[str, Any]]:
-    data = client.post(
-        "/sp/adGroups/list",
-        {
+    ad_groups: List[Dict[str, Any]] = []
+    next_token: Optional[str] = None
+    while True:
+        body: Dict[str, Any] = {
             "maxResults": 100,
             "filters": {
                 "campaignIdFilter": {"include": [str(campaign_id)]},
                 "stateFilter": {"include": ["ENABLED"]},
             },
-        },
-        content_type="application/vnd.spadgroup.v3+json",
-        accept="application/vnd.spadgroup.v3+json",
-    )
-    return data.get("adGroups", []) if isinstance(data, dict) else []
+        }
+        if next_token:
+            body["nextToken"] = next_token
+        data = client.post(
+            "/sp/adGroups/list",
+            body,
+            content_type="application/vnd.spadgroup.v3+json",
+            accept="application/vnd.spadgroup.v3+json",
+        )
+        if isinstance(data, dict):
+            ad_groups.extend(
+                group
+                for group in data.get("adGroups", [])
+                if str(group.get("campaignId") or "") == str(campaign_id)
+            )
+            next_token = data.get("nextToken")
+        else:
+            next_token = None
+        if not next_token:
+            return ad_groups
 
 
 def _first_ad_group_id(client: AmazonAdsClient, campaign_id: str) -> Optional[str]:
