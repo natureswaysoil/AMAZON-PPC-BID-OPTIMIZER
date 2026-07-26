@@ -544,16 +544,25 @@ class AmazonAdsClient:
         return response.content
 
     def list_campaigns(self) -> List[Dict[str, Any]]:
-        data = self.post(
-            "/sp/campaigns/list",
-            {
+        campaigns: List[Dict[str, Any]] = []
+        next_token: Optional[str] = None
+        while True:
+            body: Dict[str, Any] = {
                 "maxResults": 100,
                 "filters": {"stateFilter": {"include": ["ENABLED"]}},
-            },
-            content_type=MEDIA_TYPES["campaigns_v3"],
-            accept=MEDIA_TYPES["campaigns_v3"],
-        )
-        return data.get("campaigns", [])
+            }
+            if next_token:
+                body["nextToken"] = next_token
+            data = self.post(
+                "/sp/campaigns/list",
+                body,
+                content_type=MEDIA_TYPES["campaigns_v3"],
+                accept=MEDIA_TYPES["campaigns_v3"],
+            )
+            campaigns.extend(data.get("campaigns", []))
+            next_token = data.get("nextToken")
+            if not next_token:
+                return campaigns
 
     def list_keywords(self, campaign_id: str) -> List[Dict[str, Any]]:
         data = self.post(
