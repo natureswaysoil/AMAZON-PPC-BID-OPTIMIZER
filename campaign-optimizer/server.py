@@ -138,7 +138,6 @@ def _product_bid_context(
     client: AmazonAdsClient,
     campaigns: List[Dict[str, Any]],
     product: Dict[str, Any],
-    fallback: Tuple[Optional[str], Optional[str]],
 ) -> Tuple[Optional[str], Optional[str]]:
     """Prefer this product's exact campaign because recommendations are ad-group scoped."""
     title = _sanitize_name(str(product.get("title") or "")).lower()[:45]
@@ -158,7 +157,7 @@ def _product_bid_context(
                     return campaign_id, ad_group_id
         except Exception:
             continue
-    return fallback
+    return None, None
 
 
 def _sanitize_name(name: str) -> str:
@@ -410,24 +409,21 @@ def api_products_with_live_bids():
         rows = load_products()
         products = [normalized_product(row) for row in rows]
         client = None
-        campaign_id = None
-        ad_group_id = None
         campaigns: List[Dict[str, Any]] = []
         try:
             client = AmazonAdsClient()
             campaigns = client.list_campaigns()
-            campaign_id, ad_group_id = _first_bid_context(client)
         except Exception:
             client = None
         enriched = []
         for raw_row, product in zip(rows, products):
-            product_campaign_id, product_ad_group_id = (campaign_id, ad_group_id)
+            product_campaign_id: Optional[str] = None
+            product_ad_group_id: Optional[str] = None
             if client:
                 product_campaign_id, product_ad_group_id = _product_bid_context(
                     client,
                     campaigns,
                     product,
-                    (campaign_id, ad_group_id),
                 )
             enriched.append(
                 _enrich_product_bid(
@@ -442,7 +438,7 @@ def api_products_with_live_bids():
             "count": len(enriched),
             "bid_mode": get_budget_protection_mode(),
             "budget_protection": budget_protection_status(),
-            "bid_context_available": bool(client and campaign_id and ad_group_id),
+            "bid_context_available": bool(client and campaigns),
             "products": enriched,
         })
     except Exception as exc:
