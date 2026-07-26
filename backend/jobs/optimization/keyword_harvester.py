@@ -155,9 +155,8 @@ def _filter_candidates(search_terms, existing):
         if purchases > 0 and clicks >= MIN_CLICKS_WITH_ORDERS and acos <= MAX_ACOS_TO_ADD:
             qualifies = True
             reason = f"orders={purchases}, clicks={clicks}, acos={acos:.0%}"
-        elif purchases == 0 and clicks >= MIN_CLICKS_NO_ORDERS:
-            qualifies = True
-            reason = f"high-traffic clicks={clicks}"
+        # Never promote a no-order search term as a positive keyword. Those
+        # terms belong in the negative/bid-down workflow after its thresholds.
 
         if qualifies:
             bid = max(round(min(keyword_bid * 0.8, 1.50), 2), 0.30)
