@@ -108,23 +108,40 @@ def _first_bid_context(client: AmazonAdsClient) -> Tuple[Optional[str], Optional
 
 def _bid_keywords(raw_row: Dict[str, Any], product: Dict[str, Any]) -> List[str]:
     """Return buyer-intent phrases before generic one-word feed keywords."""
+    title = str(product.get("title") or raw_row.get("Title") or "").lower()
+    preferred: List[str] = []
+    for marker, phrase in (
+        ("tomato", "tomato fertilizer"),
+        ("dog urine", "dog urine lawn repair"),
+        ("fruit tree", "fruit tree fertilizer"),
+        ("liquid kelp", "liquid kelp fertilizer"),
+        ("bone meal", "liquid bone meal fertilizer"),
+        ("orchid", "orchid fertilizer"),
+        ("pasture", "pasture fertilizer"),
+        ("lawn fertilizer", "lawn fertilizer"),
+        ("humic", "humic acid soil conditioner"),
+        ("biochar", "biochar soil conditioner"),
+    ):
+        if marker in title:
+            preferred.append(phrase)
     try:
         keywords = generate_keywords_for_product(raw_row, limit=30)
         if keywords:
-            generic = GENERIC_EXACT_BLOCKLIST
-            return sorted(
+            ranked = sorted(
                 keywords,
                 key=lambda keyword: (
                     "fertilizer" not in keyword.lower(),
                     len(keyword.split()) < 2,
-                    keyword.lower() in generic,
+                    keyword.lower() in GENERIC_EXACT_BLOCKLIST,
                     -len(keyword.split()),
                 ),
             )
+            return list(dict.fromkeys(preferred + ranked))
     except Exception:
         pass
 
-    title = str(product.get("title") or raw_row.get("Title") or "fertilizer").lower()
+    if preferred:
+        return preferred
     for phrase in (
         "dog urine", "fruit tree fertilizer", "liquid kelp", "humic acid",
         "bone meal", "pasture fertilizer", "lawn fertilizer", "compost",
