@@ -1,17 +1,23 @@
+import { GoogleAuth } from "google-auth-library";
+
 // campaign-optimizer requires Cloud Run IAM auth (no unauthenticated ingress),
-// so calls to it need an identity token minted for that exact audience via the
-// metadata server - the same mechanism Cloud Scheduler uses to call it. Plus
-// a separate, app-level shared secret (verify_internal_token in
-// extended_server.py). Both are required; neither alone is sufficient.
+// so calls to it need an identity token minted for that exact audience. Use
+// Google's auth client instead of calling the metadata server directly: it
+// handles Cloud Run's runtime credentials and token refresh semantics.
+const googleAuth = new GoogleAuth();
+
 async function fetchIdentityToken(audience: string): Promise<string | null> {
   try {
-    const res = await fetch(
-      `http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/identity?audience=${encodeURIComponent(audience)}`,
-      { headers: { "Metadata-Flavor": "Google" } }
-    );
-    if (!res.ok) return null;
-    return await res.text();
-  } catch {
+    const client = await googleAuth.getIdTokenClient(audience);
+    const headers = await client.getRequestHeaders();
+    const authorization =
+      typeof (headers as { get?: unknown }).get === "function"
+        ? (headers as unknown as { get(name: string): string | null }).get("authorization")
+        : (headers as unknown as Record<string, string>).Authorization ||
+          (headers as unknown as Record<string, string>).authorization;
+    return authorization?.replace(/^Bearer\s+/i, "") || null;
+  } catch (error) {
+    console.error("Unable to mint backend Cloud Run identity token:", error);
     return null;
   }
 }
