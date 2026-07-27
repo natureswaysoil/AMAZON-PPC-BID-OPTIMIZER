@@ -925,6 +925,29 @@ def build_dashboard_cache(lookback_days: int = 14) -> Dict[str, Any]:
         recommendation_target = None
         recommendation_source = "UNAVAILABLE"
 
+        # Only enabled campaigns need live bid enrichment on the dashboard.
+        # Fetching ad groups, keywords, and recommendations for hundreds of
+        # paused campaigns causes the Cloud Run request to hit its 30-minute
+        # timeout without adding actionable data.
+        is_enabled = str(c.get("state") or "").upper() == "ENABLED"
+        if not is_enabled:
+            results.append({
+                **c,
+                "impressions": int(summary.get("impressions", 0)),
+                "clicks": clicks,
+                "spend": round(spend, 2),
+                "sales": round(sales, 2),
+                "orders": orders,
+                "acos": acos,
+                "amazonSuggestedBidLow": None,
+                "amazonSuggestedBidHigh": None,
+                "currentAppliedBid": None,
+                "currentBidMode": mode,
+                "bidRecommendationSource": "UNAVAILABLE",
+                "bidRecommendationTarget": None,
+            })
+            continue
+
         try:
             ad_groups = client.list_ad_groups(cid)
         except Exception as exc:
