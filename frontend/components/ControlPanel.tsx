@@ -66,31 +66,6 @@ function acosClass(v: number | null | undefined): string {
   return +v < 0.3 ? "text-nws-accent" : +v < 0.5 ? "text-nws-warn" : "text-nws-danger";
 }
 
-function clamp(v: number, lo: number, hi: number): number {
-  return Math.max(lo, Math.min(hi, v));
-}
-
-function estimateBidWindow(c: Campaign, applied: number | null | undefined) {
-  const base = applied != null && isFinite(+applied) ? +applied : 0.75;
-  const budget = +(c.budget?.budget ?? 25);
-  const clicks = +(c.clicks ?? 0);
-  const acos = c.acos != null && isFinite(+c.acos) ? +c.acos : null;
-
-  const budgetFactor = clamp(Math.sqrt(Math.max(budget, 5) / 25), 0.8, 1.4);
-  const volumeFactor = clamp(0.9 + Math.min(clicks, 200) / 1000, 0.9, 1.1);
-
-  let perfFactor = 1.0;
-  if (acos == null) perfFactor = 0.95;
-  else if (acos <= 0.25) perfFactor = 1.18;
-  else if (acos <= 0.35) perfFactor = 1.08;
-  else if (acos <= 0.5) perfFactor = 1.0;
-  else if (acos <= 0.7) perfFactor = 0.9;
-  else perfFactor = 0.8;
-
-  const center = clamp(base * budgetFactor * volumeFactor * perfFactor, 0.25, 2.5);
-  return { low: +(center * 0.72).toFixed(2), high: +(center * 1.28).toFixed(2) };
-}
-
 const btnBase =
   "font-mono text-[11px] font-medium px-[15px] py-2 rounded-[7px] border cursor-pointer transition inline-flex items-center gap-1.5 whitespace-nowrap disabled:opacity-35 disabled:cursor-not-allowed";
 const btnGhost = `${btnBase} bg-transparent border-nws-border text-nws-muted hover:border-nws-accent hover:text-nws-accent`;
@@ -356,7 +331,7 @@ export default function ControlPanel() {
     }
   };
 
-  const bidMode = (dashboardData?.bid_mode || "UNKNOWN").toUpperCase();
+  const bidMode = (dashboardData?.status?.bid_mode || dashboardData?.bid_mode || "UNKNOWN").toUpperCase();
   const summary = dashboardData?.summary || {};
   const allCampaigns: Campaign[] = dashboardData?.campaigns || [];
   const enabledCampaigns = allCampaigns.filter((c) => (c.state || "").toUpperCase() === "ENABLED");
@@ -515,7 +490,9 @@ export default function ControlPanel() {
                       ({enabledCampaigns.length} enabled / {pausedCampaigns.length} paused)
                     </span>
                   </div>
-                  <div className="text-[11px] text-nws-muted">ENABLED only · 14-day window · bids from Amazon suggested range</div>
+                <div className="text-[11px] text-nws-muted">
+                  ENABLED only · 14-day window · live Amazon ranges only; unavailable ranges are never estimated
+                </div>
                 </div>
 
                 {dashboardError ? (
@@ -573,16 +550,10 @@ export default function ControlPanel() {
                       const name = c.campaignName || c.name || "Unnamed";
                       const budget = c.budget?.budget != null ? money(c.budget.budget) : "—";
                       const mode = (c.currentBidMode || bidMode || "UNKNOWN").toUpperCase();
-                      let low = c.amazonSuggestedBidLow;
-                      let high = c.amazonSuggestedBidHigh;
+                      const low = c.amazonSuggestedBidLow;
+                      const high = c.amazonSuggestedBidHigh;
                       const applied = c.currentAppliedBid;
-                      let estimated = false;
-                      if (low == null || high == null) {
-                        const est = estimateBidWindow(c, applied);
-                        low = est.low;
-                        high = est.high;
-                        estimated = true;
-                      }
+                      const liveRecommendation = low != null && high != null;
                       return (
                         <div key={cid} className="bg-nws-surface border border-nws-border rounded-card p-5 hover:border-nws-accent/30 transition">
                           <div className="flex items-start justify-between gap-2.5 mb-4">
@@ -624,14 +595,18 @@ export default function ControlPanel() {
                           </div>
                           <div className="bg-nws-surface2 rounded-[10px] px-3.5 py-3 mt-3">
                             <div className="text-[9px] uppercase tracking-wider text-nws-muted mb-2.5 flex items-center justify-between">
-                              <span>{estimated ? "Estimated Bid Window (preview)" : "Amazon Suggested Bid Window"}</span>
+                              <span>
+                                {liveRecommendation ? "Amazon Suggested Bid Window" : "Amazon recommendation unavailable"}
+                              </span>
                               <span className="inline-flex items-center gap-1.5">
                                 <span
                                   className={`text-[9px] px-2 py-0.5 rounded-full font-bold ${
-                                    estimated ? "bg-nws-warn/20 text-nws-warn" : "bg-nws-accent/20 text-nws-accent2"
+                                    liveRecommendation
+                                      ? "bg-nws-accent/20 text-nws-accent2"
+                                      : "bg-nws-muted/[0.12] text-nws-muted"
                                   }`}
                                 >
-                                  {estimated ? "ESTIMATED" : "LIVE"}
+                                  {liveRecommendation ? "LIVE" : "UNAVAILABLE"}
                                 </span>
                                 <span className="text-[9px] px-2 py-0.5 rounded-full font-semibold bg-nws-muted/[0.12] text-nws-muted">
                                   {mode}
@@ -641,17 +616,21 @@ export default function ControlPanel() {
                             <div className="grid grid-cols-3 gap-2 text-center">
                               <div>
                                 <div className="text-[9px] text-nws-muted mb-1">OFF-PEAK (low)</div>
-                                <div className="text-[13px] font-semibold text-nws-blue">{money(low)}</div>
+                                <div className="text-[13px] font-semibold text-nws-blue">
+                                  {low != null ? money(low) : "—"}
+                                </div>
                               </div>
                               <div>
-                                <div className="text-[9px] text-nws-muted mb-1">APPLIED BID</div>
+                                <div className="text-[9px] text-nws-muted mb-1">CURRENT BID</div>
                                 <div className="text-[13px] font-semibold text-nws-warn">
                                   {applied != null ? money(applied) : "—"}
                                 </div>
                               </div>
                               <div>
                                 <div className="text-[9px] text-nws-muted mb-1">PEAK (high)</div>
-                                <div className="text-[13px] font-semibold text-nws-accent">{money(high)}</div>
+                                <div className="text-[13px] font-semibold text-nws-accent">
+                                  {high != null ? money(high) : "—"}
+                                </div>
                               </div>
                             </div>
                           </div>

@@ -222,7 +222,7 @@
   <div id="pC">
     <div class="sec-hdr">
       <div class="sec-title">Active Campaigns <span id="campCount" style="font-size:12px;color:var(--muted);font-family:'DM Mono',monospace;font-weight:400"></span></div>
-      <div class="sec-note">ENABLED only · 14-day window · bids from Amazon suggested range</div>
+      <div class="sec-note">ENABLED only · 14-day window · live Amazon ranges only; unavailable ranges are never estimated</div>
     </div>
     <div class="camp-grid" id="campGrid">
       <div class="empty"><div class="ico">⏳</div>Loading campaigns...</div>
@@ -361,32 +361,6 @@ async function loadCampaignDiagnostics() {
   function acCls(v) {
     if (v == null) return '';
     return +v < 0.30 ? 'green' : +v < 0.50 ? 'warn' : 'red';
-  }
-  function clamp(v, lo, hi) {
-    return Math.max(lo, Math.min(hi, v));
-  }
-  function estimateBidWindow(c, applied) {
-    var base = (applied != null && isFinite(+applied)) ? +applied : 0.75;
-    var budget = +(c && c.budget && c.budget.budget != null ? c.budget.budget : 25);
-    var clicks = +(c && c.clicks != null ? c.clicks : 0);
-    var acos = (c && c.acos != null && isFinite(+c.acos)) ? +c.acos : null;
-
-    var budgetFactor = clamp(Math.sqrt(Math.max(budget, 5) / 25), 0.80, 1.40);
-    var volumeFactor = clamp(0.90 + (Math.min(clicks, 200) / 1000), 0.90, 1.10);
-
-    var perfFactor = 1.0;
-    if (acos == null) perfFactor = 0.95;
-    else if (acos <= 0.25) perfFactor = 1.18;
-    else if (acos <= 0.35) perfFactor = 1.08;
-    else if (acos <= 0.50) perfFactor = 1.00;
-    else if (acos <= 0.70) perfFactor = 0.90;
-    else perfFactor = 0.80;
-
-    var center = clamp(base * budgetFactor * volumeFactor * perfFactor, 0.25, 2.50);
-    return {
-      low: +(center * 0.72).toFixed(2),
-      high: +(center * 1.28).toFixed(2),
-    };
   }
   function esc(s) {
     return String(s || '').replace(/[&<>"']/g, function(m) {
@@ -529,23 +503,13 @@ async function loadCampaignDiagnostics() {
       var high = c.amazonSuggestedBidHigh;
       var applied = c.currentAppliedBid;
       var hasBid = low != null && high != null;
-      var estimated = false;
-      var sourceLabel = 'LIVE';
-
-      if (!hasBid) {
-        var est = estimateBidWindow(c, applied);
-        low = est.low;
-        high = est.high;
-        hasBid = true;
-        estimated = true;
-        sourceLabel = 'ESTIMATED';
-      }
+      var sourceLabel = hasBid ? 'LIVE' : 'UNAVAILABLE';
 
       var appliedClass = 'applied ' + mode;
       var bidWindowHtml = hasBid
         ? '<div class="bid-window">' +
             '<div class="bid-window-title">' +
-              '<span>' + (estimated ? 'Estimated Bid Window (preview)' : 'Amazon Suggested Bid Window') + '</span>' +
+              '<span>Amazon Suggested Bid Window</span>' +
               '<span class="badge-row">' +
                 '<span class="source-badge ' + sourceLabel + '">' + sourceLabel + '</span>' +
                 '<span class="mode-badge ' + mode + '">' + mode + '</span>' +
@@ -557,7 +521,7 @@ async function loadCampaignDiagnostics() {
                 '<div class="bid-slot-val low">' + money(low) + '</div>' +
               '</div>' +
               '<div class="bid-slot">' +
-                '<div class="bid-slot-label">APPLIED BID</div>' +
+                '<div class="bid-slot-label">CURRENT BID</div>' +
                 '<div class="bid-slot-val ' + appliedClass + '">' + (applied != null ? money(applied) : '—') + '</div>' +
               '</div>' +
               '<div class="bid-slot">' +
@@ -566,7 +530,8 @@ async function loadCampaignDiagnostics() {
               '</div>' +
             '</div>' +
           '</div>'
-        : '<div class="bid-window"><div style="font-size:10px;color:var(--muted);text-align:center;padding:4px 0">Bid window unavailable</div></div>';
+        : '<div class="bid-window"><div style="font-size:10px;color:var(--muted);text-align:center;padding:4px 0">Amazon recommendation unavailable · current bid: ' +
+            (applied != null ? money(applied) : '—') + '</div></div>';
 
       var state = (c.state || '').toUpperCase();
       var isPaused = state === 'PAUSED';
