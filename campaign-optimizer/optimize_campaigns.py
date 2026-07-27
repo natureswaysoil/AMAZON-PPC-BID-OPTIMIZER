@@ -1408,14 +1408,45 @@ def _parse_keyword_cell(value: str) -> List[str]:
     return [_normalize_kw(p) for p in parts if _normalize_kw(p)]
 
 
-def _title_ngrams(title: str) -> List[str]:
+def _title_keyword_hints(title: str) -> List[str]:
+    """Return curated buyer-intent phrases instead of arbitrary title n-grams.
+
+    Consecutive title words are not necessarily search terms. The old n-gram
+    generator launched fragments such as ``formula enhance`` and
+    ``gardens lawns`` as exact keywords, which wasted slots and made campaign
+    bid recommendations misleading.
+    """
     clean = _normalize_kw(title)
-    words = [w for w in clean.split() if w not in _KEYWORD_STOPWORDS and len(w) > 2]
-    phrases = [clean] if clean else []
-    for n in (2, 3):
-        for i in range(len(words) - n + 1):
-            phrases.append(" ".join(words[i:i + n]))
-    return phrases
+    hints: List[str] = []
+    mappings = (
+        ("booster and loosener", [
+            "soil booster", "soil loosener", "liquid soil loosener",
+            "liquid soil conditioner", "garden soil conditioner",
+            "lawn soil conditioner", "liquid soil aerator",
+            "compacted soil treatment", "clay soil loosener",
+        ]),
+        ("dog urine", [
+            "dog urine neutralizer", "dog urine lawn repair",
+            "pet urine grass treatment",
+        ]),
+        ("kennel cleaner", ["kennel cleaner", "kennel odor eliminator"]),
+        ("fruit tree", ["fruit tree fertilizer", "citrus tree fertilizer"]),
+        ("tomato", ["tomato fertilizer", "liquid tomato fertilizer"]),
+        ("liquid kelp", ["liquid kelp fertilizer", "seaweed fertilizer"]),
+        ("bone meal", ["liquid bone meal", "phosphorus fertilizer"]),
+        ("orchid", ["orchid fertilizer", "liquid orchid fertilizer"]),
+        ("pasture", ["pasture fertilizer", "hay fertilizer"]),
+        ("lawn fertilizer", ["liquid lawn fertilizer", "grass fertilizer"]),
+        ("compost", ["organic compost", "living compost", "soil amendment"]),
+        ("biochar", ["liquid biochar", "biochar soil conditioner"]),
+        ("humic", ["humic acid", "humic acid soil conditioner"]),
+        ("hydroponic", ["hydroponic fertilizer", "hydroponic nutrients"]),
+        ("seed starting", ["seed starting fertilizer", "seedling fertilizer"]),
+    )
+    for marker, phrases in mappings:
+        if marker in clean:
+            hints.extend(phrases)
+    return hints
 
 
 def _category_keyword_hints(category: str) -> List[str]:
@@ -1433,14 +1464,14 @@ def _category_keyword_hints(category: str) -> List[str]:
 def generate_keywords_for_product(product_row: dict, limit: int = 30) -> List[str]:
     """Build keyword list from a raw product CSV row.
 
-    Combines explicit Keywords/Research_Keywords cells, n-grams from the title,
-    and category-based hints. Mirrors the launch-modal preview behavior so the
-    keywords actually attached to a launched campaign match what the user saw.
+    Combines explicit Keywords/Research_Keywords cells, curated product-intent
+    title hints, and category-based hints. Mirrors the launch-modal preview
+    behavior so launched keywords match what the user saw.
     """
     merged: List[str] = []
     merged.extend(_parse_keyword_cell(product_row.get("Keywords", "")))
     merged.extend(_parse_keyword_cell(product_row.get("Research_Keywords", "")))
-    merged.extend(_title_ngrams(product_row.get("Title", "")))
+    merged.extend(_title_keyword_hints(product_row.get("Title", "")))
     merged.extend(_category_keyword_hints(product_row.get("Category", "")))
 
     seen: set = set()
