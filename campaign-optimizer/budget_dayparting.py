@@ -40,7 +40,9 @@ TAPER_BID_MULTIPLIER = float(os.getenv("TAPER_BID_MULTIPLIER", "0.60"))
 PRIME_BID_POSITION = float(os.getenv("PRIME_BID_POSITION", "1.0"))
 NORMAL_BID_POSITION = float(os.getenv("NORMAL_BID_POSITION", "0.55"))
 MIN_BID = float(os.getenv("MIN_DAYPART_BID", "0.10"))
-MAX_BID = float(os.getenv("MAX_DAYPART_BID", "2.50"))
+# Emergency account-wide backstop only. When Amazon supplies a range, the
+# product/keyword-specific comparable-auction high is the real ceiling.
+MAX_BID = float(os.getenv("MAX_DAYPART_BID", "7.00"))
 
 
 def _clamp(value: float, low: float = MIN_BID, high: float = MAX_BID) -> float:
@@ -104,7 +106,10 @@ def choose_budget_protected_bid(rec: Dict[str, float], fallback: float) -> Tuple
             applied = low * PROTECT_BID_MULTIPLIER
         else:
             applied = low * TAPER_BID_MULTIPLIER
-        return round(low, 2), round(high, 2), round(_clamp(applied), 2)
+        comparable_ceiling = min(high, MAX_BID)
+        return round(low, 2), round(high, 2), round(
+            _clamp(applied, high=comparable_ceiling), 2
+        )
 
     if mode == "PRIME":
         applied = fallback * 1.15
@@ -130,9 +135,9 @@ def choose_budget_protected_campaign_bid(
 
     protection_mode = get_budget_protection_mode()
     if protection_mode == "PROTECT":
-        return round(_clamp(low * PROTECT_BID_MULTIPLIER), 2)
+        return round(_clamp(low * PROTECT_BID_MULTIPLIER, high=min(high, MAX_BID)), 2)
     if protection_mode == "TAPER":
-        return round(_clamp(low * TAPER_BID_MULTIPLIER), 2)
+        return round(_clamp(low * TAPER_BID_MULTIPLIER, high=min(high, MAX_BID)), 2)
 
     # Prime time: let good campaigns move closer to high, but weak campaigns stay restrained.
     if acos is None:
@@ -147,4 +152,6 @@ def choose_budget_protected_campaign_bid(
         position = 0.45
     confidence = max(0.0, min(float(clicks or 0) / 40.0, 1.0))
     position = NORMAL_BID_POSITION + ((position - NORMAL_BID_POSITION) * confidence)
-    return round(_clamp(low + ((high - low) * position)), 2)
+    return round(
+        _clamp(low + ((high - low) * position), high=min(high, MAX_BID)), 2
+    )
