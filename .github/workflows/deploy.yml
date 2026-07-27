@@ -72,7 +72,15 @@ jobs:
         uses: google-github-actions/setup-gcloud@v3
 
       - name: Configure Docker
-        run: gcloud auth configure-docker gcr.io --quiet
+        run: gcloud auth configure-docker $REGION-docker.pkg.dev --quiet
+
+      - name: Create Artifact Registry repository
+        run: |
+          gcloud artifacts repositories create amazon-ppc \
+            --repository-format=docker \
+            --location=$REGION \
+            --project=$PROJECT_ID \
+            --quiet || true
 
       # Retries transient registry failures (e.g. Docker Hub 502s pulling the
       # base image) instead of failing the whole deploy outright. Confirmed
@@ -96,11 +104,11 @@ jobs:
               delay=$((delay * 2))
             done
           }
-          retry docker build -t gcr.io/$PROJECT_ID/amazon-ppc-backend:$GITHUB_SHA \
-            -t gcr.io/$PROJECT_ID/amazon-ppc-backend:latest \
+          retry docker build -t $REGION-docker.pkg.dev/$PROJECT_ID/amazon-ppc/amazon-ppc-backend:$GITHUB_SHA \
+            -t $REGION-docker.pkg.dev/$PROJECT_ID/amazon-ppc/amazon-ppc-backend:latest \
             -f backend/Dockerfile ./backend
-          retry docker push gcr.io/$PROJECT_ID/amazon-ppc-backend:$GITHUB_SHA
-          retry docker push gcr.io/$PROJECT_ID/amazon-ppc-backend:latest
+          retry docker push $REGION-docker.pkg.dev/$PROJECT_ID/amazon-ppc/amazon-ppc-backend:$GITHUB_SHA
+          retry docker push $REGION-docker.pkg.dev/$PROJECT_ID/amazon-ppc/amazon-ppc-backend:latest
 
       - name: Build Frontend
         run: |
@@ -117,18 +125,18 @@ jobs:
               delay=$((delay * 2))
             done
           }
-          retry docker build -t gcr.io/$PROJECT_ID/amazon-ppc-frontend:$GITHUB_SHA \
-            -t gcr.io/$PROJECT_ID/amazon-ppc-frontend:latest \
+          retry docker build -t $REGION-docker.pkg.dev/$PROJECT_ID/amazon-ppc/amazon-ppc-frontend:$GITHUB_SHA \
+            -t $REGION-docker.pkg.dev/$PROJECT_ID/amazon-ppc/amazon-ppc-frontend:latest \
             -f frontend/Dockerfile ./frontend
-          retry docker push gcr.io/$PROJECT_ID/amazon-ppc-frontend:$GITHUB_SHA
-          retry docker push gcr.io/$PROJECT_ID/amazon-ppc-frontend:latest
+          retry docker push $REGION-docker.pkg.dev/$PROJECT_ID/amazon-ppc/amazon-ppc-frontend:$GITHUB_SHA
+          retry docker push $REGION-docker.pkg.dev/$PROJECT_ID/amazon-ppc/amazon-ppc-frontend:latest
 
       - name: Deploy Backend Jobs
         run: |
           COMMON_ENV="PROJECT_ID=$PROJECT_ID,GOOGLE_CLOUD_PROJECT=$PROJECT_ID,BIGQUERY_DATASET=$BIGQUERY_DATASET"
 
           gcloud run jobs deploy ads-data-sync \
-            --image=gcr.io/$PROJECT_ID/amazon-ppc-backend:$GITHUB_SHA \
+            --image=$REGION-docker.pkg.dev/$PROJECT_ID/amazon-ppc/amazon-ppc-backend:$GITHUB_SHA \
             --region=$REGION \
             --set-env-vars="$COMMON_ENV,JOB_TYPE=ads_sync" \
             --memory=2Gi \
@@ -141,7 +149,7 @@ jobs:
           # rails live in calculate_optimal_bid() - 7% of AOV ceiling, +-20/25%
           # per-run movement caps, zero-conversion pause gates, 5% noise floor.
           gcloud run jobs deploy bid-optimizer \
-            --image=gcr.io/$PROJECT_ID/amazon-ppc-backend:$GITHUB_SHA \
+            --image=$REGION-docker.pkg.dev/$PROJECT_ID/amazon-ppc/amazon-ppc-backend:$GITHUB_SHA \
             --region=$REGION \
             --set-env-vars="$COMMON_ENV,JOB_TYPE=bid_optimizer,DRY_RUN=False" \
             --memory=2Gi \
@@ -152,7 +160,7 @@ jobs:
       - name: Deploy Frontend
         run: |
           gcloud run deploy amazon-ppc-dashboard \
-            --image=gcr.io/$PROJECT_ID/amazon-ppc-frontend:$GITHUB_SHA \
+            --image=$REGION-docker.pkg.dev/$PROJECT_ID/amazon-ppc/amazon-ppc-frontend:$GITHUB_SHA \
             --region=$REGION \
             --allow-unauthenticated \
             --memory=512Mi \

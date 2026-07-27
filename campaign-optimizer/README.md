@@ -139,7 +139,7 @@ Workload Identity Federation lets GitHub Actions authenticate to GCP without sto
 
    | Secret name | Value |
    |---|---|
-   | `GCP_SA_KEY` | Full contents of the `key.json` file |
+   | `GCP_CREDENTIALS_JSON` | Full contents of the `key.json` file |
 
    > ⚠️ Store `key.json` securely and delete it from your local machine after adding it to GitHub.
 
