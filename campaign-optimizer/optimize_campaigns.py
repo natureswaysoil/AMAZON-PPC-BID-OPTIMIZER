@@ -594,6 +594,35 @@ class AmazonAdsClient:
             if not next_token:
                 return keywords
 
+    def list_ad_groups(self, campaign_id: str) -> List[Dict[str, Any]]:
+        ad_groups: List[Dict[str, Any]] = []
+        next_token: Optional[str] = None
+        media_type = "application/vnd.spadgroup.v3+json"
+        while True:
+            body: Dict[str, Any] = {
+                "maxResults": 100,
+                "filters": {
+                    "campaignIdFilter": {"include": [str(campaign_id)]},
+                    "stateFilter": {"include": ["ENABLED"]},
+                },
+            }
+            if next_token:
+                body["nextToken"] = next_token
+            data = self.post(
+                "/sp/adGroups/list",
+                body,
+                content_type=media_type,
+                accept=media_type,
+            )
+            ad_groups.extend(
+                group
+                for group in data.get("adGroups", [])
+                if str(group.get("campaignId") or "") == str(campaign_id)
+            )
+            next_token = data.get("nextToken")
+            if not next_token:
+                return ad_groups
+
     def create_keywords(self, rows: List[Dict[str, Any]]) -> Dict[str, Any]:
         return self.post(
             "/sp/keywords",
@@ -692,6 +721,53 @@ class AmazonAdsClient:
             }
         except Exception as e:
             logger.warning("Bid recommendation unavailable for %s: %s", keyword, e)
+            return {}
+
+    def get_auto_bid_recommendation(
+        self,
+        campaign_id: str,
+        ad_group_id: str,
+    ) -> Dict[str, float]:
+        """Return Amazon's live range for the four automatic targeting groups."""
+        media_type = "application/vnd.spthemebasedbidrecommendation.v3+json"
+        try:
+            data = self.post(
+                "/sp/targets/bid/recommendations",
+                {
+                    "recommendationType": "BIDS_FOR_EXISTING_AD_GROUP",
+                    "campaignId": str(campaign_id),
+                    "adGroupId": str(ad_group_id),
+                    "targetingExpressions": [
+                        {"type": "CLOSE_MATCH"},
+                        {"type": "LOOSE_MATCH"},
+                        {"type": "SUBSTITUTES"},
+                        {"type": "COMPLEMENTS"},
+                    ],
+                },
+                content_type=media_type,
+                accept=media_type,
+            )
+            bid_values: List[float] = []
+            for recommendation in data.get("bidRecommendations", []):
+                for target in recommendation.get("bidRecommendationsForTargetingExpressions", []):
+                    for value in target.get("bidValues", []):
+                        suggested = value.get("suggestedBid")
+                        if isinstance(suggested, (int, float)) and suggested > 0:
+                            bid_values.append(float(suggested))
+            if not bid_values:
+                return {}
+            bid_values.sort()
+            return {
+                "low": bid_values[0],
+                "high": bid_values[-1],
+                "suggested": bid_values[len(bid_values) // 2],
+            }
+        except Exception as exc:
+            logger.warning(
+                "Automatic bid recommendation unavailable for campaign %s: %s",
+                campaign_id,
+                exc,
+            )
             return {}
 
     def request_report(self, body: Dict[str, Any]) -> str:
@@ -845,35 +921,63 @@ def build_dashboard_cache(lookback_days: int = 14) -> Dict[str, Any]:
 
         bid_low = None
         bid_high = None
-        applied = None
+        current_bid = None
+        recommendation_target = None
+        recommendation_source = "UNAVAILABLE"
 
         try:
-            keywords = client.list_keywords(cid)
-        except Exception:
-            keywords = []
+            ad_groups = client.list_ad_groups(cid)
+        except Exception as exc:
+            logger.warning("Ad groups unavailable for campaign %s: %s", cid, exc)
+            ad_groups = []
 
-        if keywords:
-            kw = keywords[0]
-            current_bid = float(kw.get("bid") or 0.0)
-            rec = client.get_bid_recommendation(
+        targeting_type = str(c.get("targetingType") or "").upper()
+        if targeting_type == "AUTO" and ad_groups:
+            group = ad_groups[0]
+            default_bid = float(group.get("defaultBid") or 0.0)
+            current_bid = round(default_bid, 2) if default_bid > 0 else None
+            rec = client.get_auto_bid_recommendation(
                 cid,
-                str(kw.get("adGroupId") or ""),
-                str(kw.get("keywordText") or ""),
-                str(kw.get("matchType") or "PHRASE"),
+                str(group.get("adGroupId") or ""),
             )
-            low, high, applied_bid = choose_bid(
-                rec,
-                current_bid if current_bid > 0 else DEFAULT_FALLBACK_BID,
-            )
-            if low > 0 and high > 0:
-                applied_bid = choose_campaign_applied_bid(low, high, mode, acos, clicks)
-                bid_low = low
-                bid_high = high
-                applied = applied_bid
+            recommendation_target = "Automatic targeting groups"
+        else:
+            try:
+                keywords = client.list_keywords(cid)
+            except Exception as exc:
+                logger.warning("Keywords unavailable for campaign %s: %s", cid, exc)
+                keywords = []
+
+            if keywords:
+                # Exact first, then highest current bid. The target is named in
+                # the payload so a campaign-level range is never presented as
+                # if it covered every keyword.
+                kw = sorted(
+                    keywords,
+                    key=lambda item: (
+                        str(item.get("matchType") or "").upper() != "EXACT",
+                        -float(item.get("bid") or 0.0),
+                    ),
+                )[0]
+                kw_bid = float(kw.get("bid") or 0.0)
+                current_bid = round(kw_bid, 2) if kw_bid > 0 else None
+                recommendation_target = str(kw.get("keywordText") or "")
+                rec = client.get_bid_recommendation(
+                    cid,
+                    str(kw.get("adGroupId") or ""),
+                    recommendation_target,
+                    str(kw.get("matchType") or "EXACT"),
+                )
             else:
-                bid_low = None
-                bid_high = None
-                applied = round(current_bid, 2) if current_bid > 0 else None
+                rec = {}
+
+        if rec:
+            low = float(rec.get("low") or 0.0)
+            high = float(rec.get("high") or 0.0)
+            if low > 0 and high > 0:
+                bid_low = round(low, 2)
+                bid_high = round(high, 2)
+                recommendation_source = "AMAZON_LIVE"
 
         results.append({
             **c,
@@ -885,8 +989,10 @@ def build_dashboard_cache(lookback_days: int = 14) -> Dict[str, Any]:
             "acos": acos,
             "amazonSuggestedBidLow": bid_low,
             "amazonSuggestedBidHigh": bid_high,
-            "currentAppliedBid": applied,
+            "currentAppliedBid": current_bid,
             "currentBidMode": mode,
+            "bidRecommendationSource": recommendation_source,
+            "bidRecommendationTarget": recommendation_target,
         })
 
     cache = {
