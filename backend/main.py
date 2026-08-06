@@ -85,6 +85,10 @@ def main():
             from jobs.optimization.keyword_harvester import run_keyword_harvester
 
             run_keyword_harvester()
+        elif job_type == "budget_pacer":
+            from jobs.optimization.budget_pacer import run_budget_pacer
+
+            run_budget_pacer()
         elif job_type == "ads_sync":
             from jobs.data_sync.amazon_ads_sync import run_amazon_ads_sync
 

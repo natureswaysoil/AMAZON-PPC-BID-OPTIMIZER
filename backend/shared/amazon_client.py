@@ -165,7 +165,40 @@ class AmazonAdsClient:
         campaigns = response if isinstance(response, list) else []
         logger.info(f"✅ Retrieved {len(campaigns)} campaigns")
         return campaigns
+
+    def update_campaign_budget(self, campaign_id: int, new_budget: float) -> Dict:
+        """Update one Sponsored Products campaign daily budget via API v3."""
+        payload = {"campaigns": [{
+            "campaignId": str(campaign_id),
+            "budget": {"budget": round(new_budget, 2), "budgetType": "DAILY"},
+        }]}
+        return self._make_request(
+            "PUT", "/sp/campaigns", json=payload,
+            content_type="application/vnd.spcampaign.v3+json",
+            accept="application/vnd.spcampaign.v3+json",
+        )
     
+
+    def list_sp_campaigns_v3(self, state_filter: str = "ENABLED") -> List[Dict]:
+        """List all Sponsored Products campaigns using the supported v3 API."""
+        campaigns = []
+        next_token = None
+        while True:
+            payload = {
+                "maxResults": 1000,
+                "stateFilter": {"include": [state_filter.upper()]},
+            }
+            if next_token:
+                payload["nextToken"] = next_token
+            response = self._make_request(
+                "POST", "/sp/campaigns/list", json=payload,
+                content_type="application/vnd.spcampaign.v3+json",
+                accept="application/vnd.spcampaign.v3+json",
+            )
+            campaigns.extend(response.get("campaigns", []))
+            next_token = response.get("nextToken")
+            if not next_token:
+                return campaigns
     # ===== Keywords API =====
     
     def get_keywords(
